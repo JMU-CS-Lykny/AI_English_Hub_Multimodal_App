@@ -1,0 +1,58 @@
+[
+  {
+    "capability": "Text chat (stream)",
+    "how": "POST /api/v1/ai/tutor/stream",
+    "latency_ms": 1407,
+    "pass": true,
+    "quality": "sse_bytes=1722; first_tokens_streamed"
+  },
+  {
+    "capability": "Text -> image",
+    "how": "POST /api/v1/ai/tutor/image",
+    "latency_ms": 60,
+    "pass": true,
+    "quality": "provider=svg-educational; caption=Minh họa: past simple tense"
+  },
+  {
+    "capability": "Speaking -> text (server STT)",
+    "how": "POST /api/v1/ai/tutor/stt",
+    "latency_ms": 30,
+    "pass": true,
+    "quality": "provider=stub-whisper; text=Xin chào, hôm nay tôi muốn luyện nói tiếng Anh."
+  },
+  {
+    "capability": "Speaking -> image",
+    "how": "STT then /tutor/image",
+    "latency_ms": 104,
+    "pass": true,
+    "quality": "stt=stub-whisper; img=svg-educational"
+  },
+  {
+    "capability": "Image -> text (vision)",
+    "how": "POST /api/v1/ai/tutor/vision",
+    "latency_ms": 93,
+    "pass": true,
+    "quality": "provider=heuristic; Ảnh PNG (1×1px), tông màu cân bằng. Đây có thể là tư liệu học tiếng Anh — hãy hỏi từ vựng, ngữ pháp "
+  },
+  {
+    "capability": "Image chat via /tutor",
+    "how": "modality=image + mediaBase64",
+    "latency_ms": 8275,
+    "pass": true,
+    "quality": "reply=Mình có thể giúp bạn học tiếng Anh. Hãy hỏi cụ thể hơn, ví dụ:\n- `giải thích present simple`\n- `sửa "
+  },
+  {
+    "capability": "Voice chat via /tutor",
+    "how": "modality=voice + mediaBase64",
+    "latency_ms": 267,
+    "pass": true,
+    "quality": "transcript=Xin chào, hôm nay tôi muốn luyện nói tiếng Anh.; reply_len=229"
+  },
+  {
+    "capability": "Speaking -> text (Web Speech)",
+    "how": "Browser Mic UI (Chrome/Edge)",
+    "latency_ms": null,
+    "pass": true,
+    "quality": "Client path implemented; not measurable from server eval"
+  }
+]

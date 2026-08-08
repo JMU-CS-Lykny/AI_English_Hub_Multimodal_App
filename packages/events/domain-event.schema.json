@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DomainEvent",
+  "type": "object",
+  "required": ["type", "payload"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "user.registered",
+        "classroom.created",
+        "student.enrolled",
+        "lesson.published",
+        "quiz.submitted",
+        "exam.completed",
+        "game.session.ended",
+        "ai.session.completed",
+        "media.uploaded",
+        "rag.index.requested"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

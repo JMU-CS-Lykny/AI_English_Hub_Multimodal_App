@@ -1,0 +1,200 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            # Explicit origins fix browser "localhost" CORS conflicts with EventSource
+            allowedOrigins:
+              - "http://localhost:3000"
+              - "http://127.0.0.1:3000"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - PATCH
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            exposedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+      default-filters:
+        # RETAIN_FIRST: FastAPI services used to emit Allow-Origin: * which, combined with
+        # the gateway's localhost origin, broke browser fetch (duplicate ACAO headers).
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Access-Control-Expose-Headers, RETAIN_FIRST
+      routes:
+        # --- Domain APIs ---
+        - id: identity-auth
+          uri: ${IDENTITY_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+        - id: classrooms
+          uri: ${CLASSROOM_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/classrooms/**
+        - id: content
+          uri: ${CONTENT_URI:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/content/**
+        - id: assessments
+          uri: ${ASSESSMENT_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/assessments/**
+        # SSE stream first (more specific than /notifications/**)
+        - id: notifications-stream
+          uri: ${NOTIFICATION_URI:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/notifications/stream
+          metadata:
+            # Keep EventSource open (ms). Do NOT use 0 — that times out immediately.
+            response-timeout: 1800000
+            connect-timeout: 10000
+        - id: notifications
+          uri: ${NOTIFICATION_URI:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/notifications/**
+        # Tutor SSE first (more specific than /api/v1/ai/**)
+        - id: ai-tutor-stream
+          uri: ${AI_ORCHESTRATION_URI:http://localhost:8090}
+          predicates:
+            - Path=/api/v1/ai/tutor/stream
+          metadata:
+            # Keep token stream open for full reply. Do NOT use 0 — that times out immediately.
+            response-timeout: 180000
+            connect-timeout: 10000
+        - id: ai
+          uri: ${AI_ORCHESTRATION_URI:http://localhost:8090}
+          predicates:
+            - Path=/api/v1/ai/**
+          metadata:
+            # Quiz generate uses a short Ollama budget + heuristic fallback; tutor may be slower.
+            response-timeout: 90000
+            connect-timeout: 10000
+
+        # --- Aggregated OpenAPI JSON (Swagger UI definitions) ---
+        - id: docs-identity
+          uri: ${IDENTITY_URI:http://localhost:8081}
+          predicates:
+            - Path=/docs-json/identity
+          filters:
+            - SetPath=/v3/api-docs
+        - id: docs-classroom
+          uri: ${CLASSROOM_URI:http://localhost:8082}
+          predicates:
+            - Path=/docs-json/classroom
+          filters:
+            - SetPath=/v3/api-docs
+        - id: docs-content
+          uri: ${CONTENT_URI:http://localhost:8083}
+          predicates:
+            - Path=/docs-json/content
+          filters:
+            - SetPath=/v3/api-docs
+        - id: docs-assessment
+          uri: ${ASSESSMENT_URI:http://localhost:8084}
+          predicates:
+            - Path=/docs-json/assessment
+          filters:
+            - SetPath=/v3/api-docs
+        - id: docs-notification
+          uri: ${NOTIFICATION_URI:http://localhost:8085}
+          predicates:
+            - Path=/docs-json/notification
+          filters:
+            - SetPath=/v3/api-docs
+        - id: docs-ai
+          uri: ${AI_ORCHESTRATION_URI:http://localhost:8090}
+          predicates:
+            - Path=/docs-json/ai
+          filters:
+            - SetPath=/openapi.json
+        - id: docs-rag
+          uri: ${AI_RAG_URI:http://localhost:8091}
+          predicates:
+            - Path=/docs-json/rag
+          filters:
+            - SetPath=/openapi.json
+        - id: docs-multimodal
+          uri: ${AI_MULTIMODAL_URI:http://localhost:8092}
+          predicates:
+            - Path=/docs-json/multimodal
+          filters:
+            - SetPath=/openapi.json
+
+        # --- Direct service Swagger UIs (optional deep links) ---
+        - id: swagger-identity-ui
+          uri: ${IDENTITY_URI:http://localhost:8081}
+          predicates:
+            - Path=/swagger/identity/**
+          filters:
+            - RewritePath=/swagger/identity/(?<segment>.*), /$\{segment}
+        - id: swagger-classroom-ui
+          uri: ${CLASSROOM_URI:http://localhost:8082}
+          predicates:
+            - Path=/swagger/classroom/**
+          filters:
+            - RewritePath=/swagger/classroom/(?<segment>.*), /$\{segment}
+        - id: swagger-content-ui
+          uri: ${CONTENT_URI:http://localhost:8083}
+          predicates:
+            - Path=/swagger/content/**
+          filters:
+            - RewritePath=/swagger/content/(?<segment>.*), /$\{segment}
+        - id: swagger-assessment-ui
+          uri: ${ASSESSMENT_URI:http://localhost:8084}
+          predicates:
+            - Path=/swagger/assessment/**
+          filters:
+            - RewritePath=/swagger/assessment/(?<segment>.*), /$\{segment}
+        - id: swagger-notification-ui
+          uri: ${NOTIFICATION_URI:http://localhost:8085}
+          predicates:
+            - Path=/swagger/notification/**
+          filters:
+            - RewritePath=/swagger/notification/(?<segment>.*), /$\{segment}
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-change-me-to-a-long-random-secret-key-32b+}
+    issuer: ${JWT_ISSUER:ai-english-hub}
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    try-it-out-enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    urls:
+      - name: 01-identity
+        url: /docs-json/identity
+      - name: 02-classroom
+        url: /docs-json/classroom
+      - name: 03-content
+        url: /docs-json/content
+      - name: 04-assessment
+        url: /docs-json/assessment
+      - name: 05-notification
+        url: /docs-json/notification
+      - name: 06-ai-orchestration
+        url: /docs-json/ai
+      - name: 07-ai-rag
+        url: /docs-json/rag
+      - name: 08-ai-multimodal
+        url: /docs-json/multimodal
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway

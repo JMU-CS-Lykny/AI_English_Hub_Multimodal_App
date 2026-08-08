@@ -1,0 +1,39 @@
+# Build
+**/target/
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
+**/.gradle/
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+**/.mypy_cache/
+**/.pytest_cache/
+**/*.tsbuildinfo
+
+# Local JDK / toolchains (do not commit)
+oracleJdk-*/
+jdk*/
+**/jdk-*/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+**/application-local.yml
+
+# Logs / data
+*.log
+infra/docker/data/
+uploads/
+ollama_data/
+postgres_data/

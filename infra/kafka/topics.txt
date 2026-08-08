@@ -1,0 +1,9 @@
+# Kafka topic conventions
+# Pattern: <domain>.events
+
+classroom.events
+content.events
+assessment.events
+rag.events
+ai.events
+user.events

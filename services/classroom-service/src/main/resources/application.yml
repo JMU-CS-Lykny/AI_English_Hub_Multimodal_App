@@ -1,0 +1,34 @@
+server:
+  port: ${SERVER_PORT:8082}
+spring:
+  application:
+    name: classroom-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/classroom_db}
+    username: ${SPRING_DATASOURCE_USERNAME:englishhub}
+    password: ${SPRING_DATASOURCE_PASSWORD:englishhub}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  flyway:
+    enabled: true
+app:
+  openapi:
+    server-url: ${OPENAPI_SERVER_URL:http://localhost:8080}
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    try-it-out-enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

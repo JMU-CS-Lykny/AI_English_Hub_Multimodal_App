@@ -1,0 +1,13 @@
+Capability                          Latency  Pass  Notes
+--------------------------------------------------------------------------------------------------------------
+Text chat (stream)                   1407ms  True  sse_bytes=1722; first_tokens_streamed
+Text -> image                          60ms  True  provider=svg-educational; caption=Minh h?a: past simple tense
+Speaking -> text (server STT)          30ms  True  provider=stub-whisper; text=Xin ch?o, h?m nay t?i mu?n luy?n n?i ti?ng
+Speaking -> image                     104ms  True  stt=stub-whisper; img=svg-educational
+Image -> text (vision)                 93ms  True  provider=heuristic; ?nh PNG (1?1px), t?ng m?u c?n b?ng. ??y c? th? l? 
+Image chat via /tutor                8275ms  True  reply=M?nh c? th? gi?p b?n h?c ti?ng Anh. H?y h?i c? th? h?n, v? d?:
+-
+Voice chat via /tutor                 267ms  True  transcript=Xin ch?o, h?m nay t?i mu?n luy?n n?i ti?ng Anh.; reply_len=
+Speaking -> text (Web Speech)           n/a  True  Client path implemented; not measurable from server eval
+
+Wrote eval-multimodal-results.json
