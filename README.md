@@ -193,8 +193,12 @@ docker compose logs -f --tail=80 web gateway
 | Web app | http://localhost:3000 |
 | **Swagger hub (all APIs)** | http://localhost:8080/swagger-ui.html |
 | API Gateway | http://localhost:8080 |
+| Postgres | localhost:5432 |
+| Redis | localhost:6379 |
+| Kafka | localhost:9092 |
 | Qdrant | http://localhost:6333 |
 | Ollama | http://localhost:11434 |
+| Notification (direct) | http://localhost:8085 |
 | MinIO console (profile `storage`) | http://localhost:9001 |
 
 Models are pulled automatically by `ollama-init` on `docker compose up`.  
@@ -243,61 +247,420 @@ docker compose up -d
 
 ## Services
 
-Compose inventory (`docker-compose.yml`):
+Compose inventory (`docker-compose.yml`) — **every container**:
 
-| Layer | Service | Port | Role |
-|---|---|---|---|
-| Edge | `gateway` | **8080** | JWT, routing, Swagger aggregation, SSE proxy (inbox / chat / tutor), 16MB JSON codec |
-| Web | `web` (`apps/web`) | **3000** | Next.js home hub + teacher/student deep routes (chat, quizzes, exam, tutor) |
-| Domain | `identity-service` | 8081 | Auth, JWT, profile (`/me`, `/profile`), Redis sessions |
-| Domain | `classroom-service` | 8082 | Classrooms, invite codes, join requests, members, **per-class chat** (Postgres + SSE hub) |
-| Domain | `content-service` | 8083 | Lessons + publish lifecycle |
-| Domain | `assessment-service` | 8084 | Quizzes (EXAM/PRACTICE, draft/publish, Excel, attempts); calls classroom for exam student IDs |
-| Domain | `notification-service` | **8085** | Inbox + SSE; Kafka on `classroom.events` + `assessment.events`; exam reminder scheduler |
-| AI | `ai-orchestration` | 8090 | LangGraph tutor, detect-subject, generate-quiz, multimodal façade |
-| AI | `ai-rag` | 8091 | Chunk/embed + Qdrant retrieval |
-| AI | `ai-multimodal` | 8092 | STT / vision / image / video helpers |
-| Models | `ollama` (+ `ollama-init`) | **11434** | Private LLM / embeddings (`llama3.2`, `llama3.2:1b`, `nomic-embed-text`) |
-| Data | `postgres` | **5432** | One DB per service (`identity_db`, `classroom_db`, …) |
-| Data | `redis` | **6379** | Identity refresh/session |
-| Data | `kafka` + `zookeeper` | **9092** / 2181 | Domain events |
-| Data | `qdrant` | **6333** | Vector search (`lesson_chunks`) |
-| Optional | `minio` (profile `storage`) | **9000** / **9001** | S3-compatible object storage |
+| Layer | Service | Image / build | Port | Role |
+|---|---|---|---|---|
+| Edge | `gateway` | `gateway/Dockerfile` (Spring Boot 3.4 WebFlux) | **8080** | JWT, routing, Swagger hub, SSE proxy, 16MB JSON |
+| Web | `web` | `apps/web/Dockerfile` (Next.js 15 standalone) | **3000** | Home hub, chat, quizzes, exam, mascot |
+| Domain | `identity-service` | Spring Boot MVC | 8081 | Auth, JWT, profile, Redis sessions |
+| Domain | `classroom-service` | Spring Boot MVC | 8082 | Classrooms, join, members, **chat SSE** |
+| Domain | `content-service` | Spring Boot MVC | 8083 | Lessons + publish |
+| Domain | `assessment-service` | Spring Boot MVC | 8084 | Quizzes, Excel, attempts, exam schedule events |
+| Domain | `notification-service` | Spring Boot MVC | **8085** | Inbox SSE, Kafka consumers, exam reminders |
+| AI | `ai-orchestration` | FastAPI | 8090 | LangGraph tutor, detect-subject, generate-quiz |
+| AI | `ai-rag` | FastAPI | 8091 | Chunk/embed + Qdrant retrieve |
+| AI | `ai-multimodal` | FastAPI | 8092 | STT / vision / image / video helpers |
+| Models | `ollama` | `ollama/ollama` | **11434** | Private LLM runtime |
+| Models | `ollama-init` | `curlimages/curl` | — | One-shot `api/pull` (`llama3.2`, `llama3.2:1b`, `nomic-embed-text`) |
+| Data | `postgres` | `postgres:16-alpine` | **5432** | One logical DB per service |
+| Data | `redis` | `redis:7-alpine` | **6379** | Refresh tokens / sessions |
+| Data | `zookeeper` | `cp-zookeeper:7.6.1` | 2181 | Kafka coordination |
+| Data | `kafka` | `cp-kafka:7.6.1` | **9092** / 29092 | Domain events |
+| Data | `qdrant` | `qdrant/qdrant:v1.13.2` | **6333** | Vector store `lesson_chunks` |
+| Optional | `minio` | `minio/minio` (profile `storage`) | **9000** / **9001** | S3-compatible object storage |
+
+CI (not Compose): GitHub Actions — Node 22 web build, Java 21 Maven, Python 3.12 `compileall`.
 
 Planned later: `game-service`, `progress-service`, `media-service` (see [`services/README.md`](services/README.md)). Postgres already creates placeholder DBs `progress_db` / `media_db` / `rag_meta_db`.
 
+## Architecture
+
+End-to-end drawings. **Every Compose server** is on Docker network `hub`. Ollama is **internal only** (not a public gateway route).
+
+### 1. All servers and services
+
+```mermaid
+flowchart TB
+  subgraph clients["Clients"]
+    Browser["Browser<br/>Teacher / Student / Admin"]
+    SwaggerUI["Swagger UI<br/>localhost:8080/swagger-ui.html"]
+  end
+
+  subgraph compose["Docker Compose network: hub"]
+    subgraph edge["Edge"]
+      Web["web :3000<br/>Next.js 15 standalone"]
+      GW["gateway :8080<br/>Spring Cloud Gateway WebFlux"]
+    end
+
+    subgraph domain["Domain Java 21 / Spring Boot 3.4"]
+      ID["identity-service :8081"]
+      CR["classroom-service :8082"]
+      CO["content-service :8083"]
+      AS["assessment-service :8084"]
+      NT["notification-service :8085"]
+    end
+
+    subgraph aiplane["AI plane Python 3.12 / FastAPI"]
+      ORCH["ai-orchestration :8090"]
+      RAG["ai-rag :8091"]
+      MM["ai-multimodal :8092"]
+    end
+
+    subgraph models["Models"]
+      OLL["ollama :11434"]
+      OINIT["ollama-init<br/>curl pull once"]
+    end
+
+    subgraph data["Data servers"]
+      PG[("postgres :5432<br/>postgres:16-alpine")]
+      RD[("redis :6379<br/>redis:7-alpine")]
+      ZK["zookeeper :2181<br/>cp-zookeeper:7.6.1"]
+      KF["kafka :9092<br/>cp-kafka:7.6.1"]
+      QD[("qdrant :6333<br/>qdrant:v1.13.2")]
+      MINIO["minio :9000/:9001<br/>profile storage"]
+    end
+  end
+
+  subgraph ci["CI - GitHub Actions"]
+    CIW["web job Node 22"]
+    CIJ["java job Temurin 21 Maven"]
+    CIP["python-ai job 3.12"]
+  end
+
+  Browser --> Web
+  Browser --> SwaggerUI
+  SwaggerUI --> GW
+  Web -->|"REST + EventSource"| GW
+  GW --> ID
+  GW --> CR
+  GW --> CO
+  GW --> AS
+  GW --> NT
+  GW --> ORCH
+  ID --> PG
+  ID --> RD
+  CR --> PG
+  CR --> KF
+  CO --> PG
+  CO --> KF
+  AS --> PG
+  AS --> KF
+  AS -.-> CR
+  NT --> PG
+  NT --> KF
+  ORCH --> RAG
+  ORCH --> MM
+  ORCH --> OLL
+  ORCH -.-> CR
+  ORCH -.-> CO
+  RAG --> QD
+  RAG --> OLL
+  MM --> OLL
+  OINIT --> OLL
+  KF --> ZK
+  CIW -.-> Web
+  CIJ -.-> GW
+  CIP -.-> ORCH
+```
+
+### 2. Request path through the gateway
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant Web as Next.js :3000
+  participant GW as Gateway :8080
+  participant Svc as Domain / AI service
+
+  User->>Web: open /home, chat, exam, mascot
+  Web->>GW: Authorization Bearer JWT<br/>or EventSource ?access_token=
+  GW->>GW: validate JWT
+  GW->>Svc: X-User-Id · X-User-Role · X-User-Name
+  Svc-->>GW: JSON or SSE stream
+  GW-->>Web: same
+  Web-->>User: UI
+```
+
+Public prefixes: `/api/v1/auth/**` → identity · `/api/v1/classrooms/**` → classroom (chat SSE first) · `/api/v1/content/**` → content · `/api/v1/assessments/**` → assessment · `/api/v1/notifications/**` → notification · `/api/v1/ai/**` → orchestration (tutor stream first).
+
+### 3. Database per service
+
+```mermaid
+flowchart LR
+  PG[("postgres container")]
+  PG --> IDB[("identity_db")]
+  PG --> CDB[("classroom_db")]
+  PG --> CODB[("content_db")]
+  PG --> ADB[("assessment_db")]
+  PG --> NDB[("notification_db")]
+  PG --> PDB[("progress_db<br/>placeholder")]
+  PG --> MDB[("media_db<br/>placeholder")]
+  PG --> RDB[("rag_meta_db<br/>placeholder")]
+
+  ID["identity-service"] --> IDB
+  CR["classroom-service"] --> CDB
+  CO["content-service"] --> CODB
+  AS["assessment-service"] --> ADB
+  NT["notification-service"] --> NDB
+```
+
+Cross-service links are **UUIDs only** (no shared FKs). See [ADR 0001](docs/adr/0001-database-per-service.md).
+
+### 4. Kafka domain events
+
+```mermaid
+flowchart LR
+  CR["classroom-service"] -->|"classroom.events<br/>join_request.* · student.enrolled"| KF[(Kafka)]
+  CO["content-service"] -->|"content.events / rag.events<br/>lesson.published"| KF
+  AS["assessment-service"] -->|"assessment.events<br/>quiz.exam.scheduled"| KF
+  KF --> NT["notification-service"]
+  KF --> RAG["ai-rag indexer"]
+  NT -->|"inbox row + SSE"| Teacher["Teacher bell"]
+  NT -->|"EXAM_REMINDER + delayed start"| Student["Student bell"]
+```
+
+Topics (`infra/kafka/topics.txt`): `classroom.events`, `content.events`, `assessment.events`, `rag.events`, `ai.events`, `user.events`.
+
+### 5. Realtime SSE
+
+```mermaid
+flowchart TB
+  subgraph browser["Browser EventSource"]
+    Bell["Notification bell"]
+    Chat["ClassroomChat"]
+    Tutor["AI Mascot / tutor stream"]
+  end
+
+  GW["Gateway SSE proxy<br/>long response-timeout"]
+
+  Bell -->|"GET /api/v1/notifications/stream"| GW
+  Chat -->|"GET /api/v1/classrooms/id/chat/stream"| GW
+  Tutor -->|"POST /api/v1/ai/tutor/stream"| GW
+
+  GW --> NT["notification-service SseHub"]
+  GW --> CR["classroom-service ChatSseHub"]
+  GW --> ORCH["ai-orchestration LangGraph tokens"]
+```
+
+Chat also **polls** history every ~25s if the EventSource drops.
+
+### 6. AI plane
+
+```mermaid
+flowchart TB
+  Web["Web: detect-subject · generate-quiz · tutor"]
+  GW["Gateway /api/v1/ai/**"]
+  ORCH["ai-orchestration<br/>FastAPI + LangGraph"]
+  RAG["ai-rag<br/>chunk / embed / retrieve"]
+  MM["ai-multimodal<br/>STT / vision / image / video"]
+  OLL["Ollama<br/>not on public gateway"]
+  QD[("Qdrant lesson_chunks")]
+
+  Web --> GW --> ORCH
+  ORCH --> RAG
+  ORCH --> MM
+  ORCH --> OLL
+  RAG --> QD
+  RAG --> OLL
+  MM --> OLL
+```
+
+See [ADR 0002](docs/adr/0002-ai-capability-plane.md). Quiz generate is **heuristic-first**; Ollama is optional with a tight timeout.
+
+### 7. Product screens → services
+
+```mermaid
+flowchart TB
+  subgraph web["Next.js routes"]
+    Home["/home tabs<br/>overview · classrooms · join · mascot · account"]
+    TQuiz["/teacher/classrooms/id/quizzes"]
+    TChat["/teacher/classrooms/id/chat"]
+    SClass["/student/classrooms/id"]
+    SChat["/student/classrooms/id/chat"]
+    SExam["/student/classrooms/id/quizzes/quizId"]
+    Tutor["/student/tutor"]
+  end
+
+  Home --> ID["identity"]
+  Home --> CR["classroom"]
+  Home --> NT["notification"]
+  Home --> ORCH["ai-orchestration"]
+  TQuiz --> AS["assessment"]
+  TQuiz --> CR
+  TChat --> CR
+  SClass --> CR
+  SClass --> CO["content"]
+  SClass --> AS
+  SChat --> CR
+  SExam --> AS
+  Tutor --> ORCH
+```
+
+### 8. Core journeys
+
+```mermaid
+flowchart LR
+  subgraph join["Join class"]
+    J1["Student invite code"] --> J2["classroom join_request"]
+    J2 --> J3["Kafka classroom.events"]
+    J3 --> J4["Teacher SSE inbox"]
+    J4 --> J5["Accept / Reject"]
+    J5 --> J6["membership"]
+  end
+```
+
+```mermaid
+flowchart LR
+  subgraph exam["Publish EXAM"]
+    E1["Teacher publish"] --> E2["assessment-service"]
+    E2 -->|"member IDs"| E3["classroom-service"]
+    E2 --> E4["Kafka quiz.exam.scheduled"]
+    E4 --> E5["Student notify now"]
+    E4 --> E6["ExamReminderScheduler"]
+  end
+```
+
+```mermaid
+flowchart LR
+  subgraph chat["Classroom chat"]
+    C1["POST message"] --> C2["classroom_db"]
+    C2 --> C3["ChatSseHub fan-out"]
+    C3 --> C4["Teacher + student UIs"]
+  end
+```
+
 ## Service techniques
 
-How each service works and the techniques it uses.
+Every technique used in this app, mapped to where it runs.
 
-### Cross-cutting patterns
+### Technique map
 
-| Technique | Where | Purpose |
-|---|---|---|
-| **API Gateway + JWT** | `gateway` | Single public entry (`:8080`); validates JWT; injects `X-User-Id` / `X-User-Role` / `X-User-Name` (UTF-8 safe) |
-| **Database-per-service** | Postgres DBs | Isolation per bounded context (`identity_db`, `classroom_db`, …) — see [ADR 0001](docs/adr/0001-database-per-service.md) |
-| **Flyway migrations** | Java services | Schema versioning per service |
-| **Kafka domain events** | classroom / content / assessment → notification / RAG | Async decoupling for join approvals, enrollments, exam reminders, indexing |
-| **SSE (Server-Sent Events)** | notification inbox; **classroom chat**; tutor stream | Realtime push; chat uses `access_token` query (EventSource cannot send `Authorization`) |
-| **Ollama (private LLM)** | AI plane | Local models; **not** exposed via the public gateway |
-| **Docker Compose** | whole stack | One-command local runtime; detached start + log rotation |
+```mermaid
+flowchart TB
+  subgraph webtech["web Next.js 15 / React 19 / TS"]
+    W1["App Router"]
+    W2["localStorage JWT"]
+    W3["EventSource SSE"]
+    W4["Tailwind v4"]
+    W5["shadcn Radix Dialog / AlertDialog"]
+    W6["lucide-react"]
+    W7["react-easy-crop"]
+    W8["Playwright demo shots"]
+    W9["browser SpeechRecognition"]
+  end
 
-Kafka topic conventions (`infra/kafka/topics.txt`): `classroom.events`, `content.events`, `assessment.events`, `rag.events`, `ai.events`, `user.events`.
+  subgraph gwtech["gateway WebFlux"]
+    G1["Spring Cloud Gateway"]
+    G2["JJWT GlobalFilter"]
+    G3["CORS + Dedupe ACAO"]
+    G4["springdoc OpenAPI hub"]
+    G5["SSE response-timeout"]
+    G6["16MB codec"]
+    G7["UTF-8 X-User-Name"]
+    G8["Actuator health/gateway"]
+  end
 
-```text
-Browser (Next.js)
-   │  REST + EventSource(SSE)
-   ▼
-Spring Cloud Gateway  ──JWT──►  Domain services (Java)
-                                     │ Kafka
-                                     ▼
-                              notification-service (inbox SSE + exam reminders)
-                              classroom-service (chat SSE hub)
-AI Tutor ──► gateway /api/v1/ai/** ──► ai-orchestration (LangGraph)
-                                            ├─ ai-rag (Qdrant)
-                                            ├─ ai-multimodal (STT / vision / image / video)
-                                            └─ Ollama
+  subgraph javatech["Java services Boot 3.4 / JPA / Flyway"]
+    J1["BCrypt + JWT access/refresh"]
+    J2["Redis refresh sessions"]
+    J3["KafkaTemplate producer"]
+    J4["KafkaListener consumer"]
+    J5["SseEmitter hubs"]
+    J6["Bean Validation"]
+    J7["Apache POI xlsx"]
+    J8["Rest client classroom IDs"]
+    J9["ExamReminderScheduler"]
+    J10["Hibernate + PostgreSQL"]
+  end
+
+  subgraph aitech["AI FastAPI"]
+    A1["LangGraph + LangChain"]
+    A2["LlamaIndex-style chunk"]
+    A3["Qdrant retrieve"]
+    A4["Ollama HTTP models"]
+    A5["heuristic quiz/subject fallback"]
+    A6["SSE token stream"]
+    A7["STT / vision / image / video"]
+  end
+
+  subgraph inftech["Infra"]
+    I1["Docker Compose + healthchecks"]
+    I2["DB-per-service"]
+    I3["Kafka + ZooKeeper"]
+    I4["json-file log rotation"]
+    I5["GitHub Actions CI"]
+    I6["Maven reactor"]
+  end
 ```
+
+### Full catalog
+
+| Layer | Technique | Where | What it does |
+|---|---|---|---|
+| Edge | **Spring Cloud Gateway** (WebFlux, Cloud 2024.0) | `gateway` | Single public API `:8080`; path routes to all domain + AI services |
+| Edge | **JJWT** `JwtAuthGlobalFilter` | `gateway` | Validates access JWT; injects `X-User-Id` / `X-User-Role` / `X-User-Name` |
+| Edge | **SSE query token** | `gateway` | EventSource cannot send `Authorization` → `?access_token=` |
+| Edge | **CORS + DedupeResponseHeader** | `gateway` | `localhost:3000` / `127.0.0.1:3000`; avoid duplicate `Allow-Origin` |
+| Edge | **springdoc OpenAPI hub** | `gateway` | Aggregated Swagger (`01-identity` … `08-ai-multimodal`) |
+| Edge | **Long SSE timeouts** | `gateway` | Inbox / chat / tutor stream `response-timeout` (minutes) |
+| Edge | **16MB JSON codec** | `gateway` + classroom | Chat attachment data-URLs |
+| Edge | **UTF-8 user-name encoding** | `gateway` + classroom | Vietnamese display names on chat |
+| Edge | **Actuator** | `gateway`, Java services | `/actuator/health` (notification healthcheck); gateway routes info |
+| Web | **Next.js 15 App Router** | `apps/web` | `/home`, teacher/student deep routes, standalone Docker |
+| Web | **React 19 + TypeScript** | `apps/web` | Client components, typed API |
+| Web | **Tailwind CSS v4** | `apps/web` | Utility + `globals.css` design system |
+| Web | **shadcn/ui + Radix** | `apps/web` | `Dialog`, `AlertDialog` (delete confirms), `Button` |
+| Web | **lucide-react** | `apps/web` | Icons (chat toolbar, header) |
+| Web | **react-easy-crop** | `apps/web` | Classroom cover crop modal |
+| Web | **localStorage JWT** | `apps/web` | Access token + user; `AuthGuard` |
+| Web | **EventSource SSE** | `NotificationBell`, `ClassroomChat`, tutor | Inbox, chat live, token stream |
+| Web | **Chat poll fallback** | `ClassroomChat` | ~25s history poll if SSE drops |
+| Web | **Browser SpeechRecognition** | tutor composer | speak→text; server STT fallback |
+| Web | **Client pagination** | `PaginationBar` | Classrooms, inbox, quiz lists |
+| Web | **Playwright** | `scripts/capture-demo-screens.mjs` | README demo screenshots |
+| Identity | **Spring Security + BCrypt** | `identity-service` | Password hash |
+| Identity | **Access + refresh JWT** | `identity-service` | Login / refresh / revoke |
+| Identity | **Redis sessions** | `identity-service` + `redis` | Refresh-token store |
+| Identity | **Flyway + JPA/Hibernate** | `identity-service` | `identity_db` schema |
+| Identity | **Profile PATCH** | `identity-service` | Name, email, grade, avatar |
+| Classroom | **Invite codes + join-request FSM** | `classroom-service` | Request → Accept/Reject → member |
+| Classroom | **Kafka producer** | `classroom-service` | `classroom.events` |
+| Classroom | **ChatSseHub `SseEmitter`** | `classroom-service` | Per-class live chat |
+| Classroom | **Chat persistence** | Flyway `V3+` | Messages, attachments, reactions, pin, edit, soft-delete |
+| Content | **Lesson publish lifecycle** | `content-service` | Draft → published |
+| Content | **Kafka toward RAG** | `content-service` | `content.events` / `rag.events` |
+| Assessment | **DRAFT / PUBLISHED + EXAM/PRACTICE** | `assessment-service` | Kinds, schedule, time-gate |
+| Assessment | **Apache POI** | `assessment-service` | `.xlsx` import/export |
+| Assessment | **Classroom HTTP client** | `assessment-service` | Member student IDs on EXAM publish |
+| Assessment | **Kafka `quiz.exam.scheduled`** | `assessment-service` | `assessment.events` |
+| Notification | **`@KafkaListener`** | `notification-service` | `classroom.events` + `assessment.events` |
+| Notification | **Inbox `SseHub`** | `notification-service` | Per-user SSE (`connected` / `notification` / `unread`) |
+| Notification | **Join resolve from bell** | `notification-service` | Accept/Reject without leaving inbox |
+| Notification | **`ExamReminderScheduler`** | `notification-service` | Delayed "starting soon" |
+| AI | **FastAPI + Uvicorn + Pydantic** | `ai-*` | HTTP APIs |
+| AI | **LangGraph + LangChain** | `ai-orchestration` | Tutor graph |
+| AI | **Tutor SSE stream** | `ai-orchestration` | Token deltas to the browser |
+| AI | **Heuristic-first quiz/subject** | `ai-orchestration` | Fast path; optional Ollama timeout |
+| AI | **LlamaIndex-style chunking** | `ai-rag` | Lesson embeddings |
+| AI | **Qdrant retrieve** | `ai-rag` + `qdrant` | Grounded tutor context |
+| AI | **Ollama HTTP** | `ollama` | `llama3.2`, `llama3.2:1b`, `nomic-embed-text`; optional `llava` |
+| AI | **`ollama-init` curl pull** | `ollama-init` | Models on `compose up` |
+| AI | **Multimodal helpers** | `ai-multimodal` | STT / vision / image / video (+ SVG/clip fallbacks) |
+| Data | **Database-per-service** | `postgres` | Isolated DBs — [ADR 0001](docs/adr/0001-database-per-service.md) |
+| Data | **Flyway migrations** | all Java domain services | Versioned schema |
+| Data | **Kafka + ZooKeeper** | `kafka`, `zookeeper` | Async events |
+| Data | **Redis 7** | `redis` | Identity tokens |
+| Data | **Qdrant** | `qdrant` | Vectors |
+| Data | **MinIO** | profile `storage` | Future object storage |
+| Ops | **Docker Compose** | whole stack | Healthchecks, log rotation (`json-file` 5m×2) |
+| Ops | **Maven reactor** | root `pom.xml` | Java 21, Boot 3.4.2, modules |
+| Ops | **GitHub Actions CI** | `.github/workflows/ci.yml` | Web tsc+build, `mvn package`, Python compile |
+| Ops | **WSL2 + Docker Desktop** | Windows host | Required engine for Compose |
+
+Kafka topics (`infra/kafka/topics.txt`): `classroom.events`, `content.events`, `assessment.events`, `rag.events`, `ai.events`, `user.events`. Flow drawings are in **Architecture** above.
+
+### Per-service notes
 
 ### `apps/web` — Next.js portals
 
@@ -446,6 +809,8 @@ uvicorn app.main:app --reload --port 8090
 ```
 
 ## Architecture notes
+
+Drawings live in **Architecture** (every Compose server + CI, gateway path, DBs, Kafka, SSE, AI plane, screens, journeys). Techniques are listed in **Service techniques** (map + full catalog).
 
 - Gateway validates JWT and forwards `X-User-Id` / `X-User-Role` / `X-User-Name`
 - Domain services trust gateway headers (internal network)
