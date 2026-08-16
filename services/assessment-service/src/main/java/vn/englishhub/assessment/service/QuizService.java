@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,8 +17,10 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import vn.englishhub.assessment.client.ClassroomClient;
 import vn.englishhub.assessment.domain.Quiz;
 import vn.englishhub.assessment.domain.QuizAttempt;
+import vn.englishhub.assessment.domain.QuizKind;
 import vn.englishhub.assessment.domain.QuizStatus;
 import vn.englishhub.assessment.repo.QuizAttemptRepository;
 import vn.englishhub.assessment.repo.QuizRepository;
@@ -28,28 +32,53 @@ public class QuizService {
     private final KafkaTemplate<String, String> kafka;
     private final ObjectMapper objectMapper;
     private final QuizExcelService excelService;
+    private final ClassroomClient classroomClient;
 
     public QuizService(
             QuizRepository quizzes,
             QuizAttemptRepository attempts,
             KafkaTemplate<String, String> kafka,
             ObjectMapper objectMapper,
-            QuizExcelService excelService) {
+            QuizExcelService excelService,
+            ClassroomClient classroomClient) {
         this.quizzes = quizzes;
         this.attempts = attempts;
         this.kafka = kafka;
         this.objectMapper = objectMapper;
         this.excelService = excelService;
+        this.classroomClient = classroomClient;
     }
 
+    public record QuizSchedule(
+            QuizKind kind,
+            Instant startsAt,
+            Instant endsAt,
+            Integer durationMinutes,
+            Integer reminderMinutesBefore,
+            String sourceLabel) {}
+
     @Transactional
-    public Quiz create(UUID userId, String role, UUID classroomId, String title, List<Map<String, Object>> questions) {
+    public Quiz create(
+            UUID userId,
+            String role,
+            UUID classroomId,
+            String title,
+            List<Map<String, Object>> questions,
+            QuizSchedule schedule) {
         requireTeacher(role);
-        return saveNew(userId, classroomId, title, normalizeQuestions(questions), QuizStatus.DRAFT);
+        Quiz quiz = saveNew(userId, classroomId, title, normalizeQuestions(questions), QuizStatus.DRAFT);
+        applySchedule(quiz, schedule, false);
+        return quizzes.save(quiz);
     }
 
     @Transactional
-    public Quiz update(UUID userId, String role, UUID quizId, String title, List<Map<String, Object>> questions) {
+    public Quiz update(
+            UUID userId,
+            String role,
+            UUID quizId,
+            String title,
+            List<Map<String, Object>> questions,
+            QuizSchedule schedule) {
         requireTeacher(role);
         Quiz quiz = get(quizId);
         assertOwner(quiz, userId, role);
@@ -60,6 +89,7 @@ public class QuizService {
             if (questions != null) {
                 quiz.setQuestionsJson(objectMapper.writeValueAsString(normalizeQuestions(questions)));
             }
+            applySchedule(quiz, schedule, false);
             return quizzes.save(quiz);
         } catch (JsonProcessingException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid questions payload");
@@ -67,7 +97,7 @@ public class QuizService {
     }
 
     @Transactional
-    public Quiz publish(UUID userId, String role, UUID quizId) {
+    public Quiz publish(UUID userId, String role, UUID quizId, QuizSchedule schedule) {
         requireTeacher(role);
         Quiz quiz = get(quizId);
         assertOwner(quiz, userId, role);
@@ -75,8 +105,27 @@ public class QuizService {
         if (questions.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quiz has no questions");
         }
+        applySchedule(quiz, schedule, true);
+
+        QuizKind kind = quiz.getKind() == null ? QuizKind.PRACTICE : quiz.getKind();
+        if (kind == QuizKind.EXAM) {
+            if (quiz.getStartsAt() == null || quiz.getDurationMinutes() == null || quiz.getDurationMinutes() <= 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "EXAM publish requires startsAt and durationMinutes");
+            }
+            quiz.setEndsAt(quiz.getStartsAt().plus(quiz.getDurationMinutes(), ChronoUnit.MINUTES));
+            if (quiz.getReminderMinutesBefore() == null) {
+                quiz.setReminderMinutesBefore(15);
+            }
+        }
+
         quiz.setStatus(QuizStatus.PUBLISHED);
-        return quizzes.save(quiz);
+        Quiz saved = quizzes.save(quiz);
+
+        if (kind == QuizKind.EXAM) {
+            emitExamScheduled(saved, userId, role);
+        }
+        return saved;
     }
 
     /**
@@ -127,6 +176,9 @@ public class QuizService {
         if ("STUDENT".equals(role) && quiz.getStatus() != QuizStatus.PUBLISHED) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Quiz not found");
         }
+        if ("STUDENT".equals(role)) {
+            assertExamWindowOpen(quiz);
+        }
         return quiz;
     }
 
@@ -146,6 +198,11 @@ public class QuizService {
         Quiz quiz = get(quizId);
         if (quiz.getStatus() != QuizStatus.PUBLISHED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quiz is not published");
+        }
+        assertExamWindowOpen(quiz);
+        QuizKind kind = quiz.getKind() == null ? QuizKind.PRACTICE : quiz.getKind();
+        if (kind == QuizKind.EXAM && attempts.existsByQuizIdAndStudentId(quizId, studentId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "EXAM allows only one attempt");
         }
         try {
             List<Map<String, Object>> questions = readQuestions(quiz);
@@ -178,9 +235,16 @@ public class QuizService {
         }
     }
 
-    public String questionsJsonForViewer(Quiz quiz, String role) {
+    /**
+     * Student list/detail: strip answers for all kinds. For EXAM outside window, hide
+     * question stems on list responses (GET by id is blocked separately).
+     */
+    public String questionsJsonForViewer(Quiz quiz, String role, boolean enforceExamGate) {
         if (!"STUDENT".equals(role)) {
             return quiz.getQuestionsJson();
+        }
+        if (enforceExamGate && isExamOutsideWindow(quiz)) {
+            return "[]";
         }
         try {
             List<Map<String, Object>> questions = readQuestions(quiz);
@@ -204,6 +268,95 @@ public class QuizService {
         }
     }
 
+    public String questionsJsonForViewer(Quiz quiz, String role) {
+        return questionsJsonForViewer(quiz, role, false);
+    }
+
+    private void emitExamScheduled(Quiz quiz, UUID teacherId, String role) {
+        List<UUID> studentIds = classroomClient.listStudentIds(quiz.getClassroomId(), teacherId, role);
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("quizId", quiz.getId().toString());
+            payload.put("classroomId", quiz.getClassroomId().toString());
+            payload.put("title", quiz.getTitle());
+            payload.put("startsAt", quiz.getStartsAt().toString());
+            payload.put("endsAt", quiz.getEndsAt() == null ? "" : quiz.getEndsAt().toString());
+            payload.put(
+                    "reminderMinutesBefore",
+                    quiz.getReminderMinutesBefore() == null ? 15 : quiz.getReminderMinutesBefore());
+            payload.put("studentIds", studentIds.stream().map(UUID::toString).toList());
+            kafka.send(
+                    "assessment.events",
+                    quiz.getId().toString(),
+                    objectMapper.writeValueAsString(Map.of(
+                            "type", "quiz.exam.scheduled",
+                            "payload", payload)));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void applySchedule(Quiz quiz, QuizSchedule schedule, boolean publishing) {
+        if (schedule == null) {
+            return;
+        }
+        if (schedule.kind() != null) {
+            quiz.setKind(schedule.kind());
+        }
+        if (schedule.startsAt() != null || publishing) {
+            if (schedule.startsAt() != null) {
+                quiz.setStartsAt(schedule.startsAt());
+            }
+        }
+        if (schedule.endsAt() != null) {
+            quiz.setEndsAt(schedule.endsAt());
+        }
+        if (schedule.durationMinutes() != null) {
+            quiz.setDurationMinutes(schedule.durationMinutes());
+        }
+        if (schedule.reminderMinutesBefore() != null) {
+            quiz.setReminderMinutesBefore(schedule.reminderMinutesBefore());
+        }
+        if (schedule.sourceLabel() != null) {
+            String label = schedule.sourceLabel().trim();
+            quiz.setSourceLabel(label.isEmpty() ? null : label);
+        }
+    }
+
+    private void assertExamWindowOpen(Quiz quiz) {
+        if (!isExamOutsideWindow(quiz)) {
+            return;
+        }
+        Instant now = Instant.now();
+        Instant starts = quiz.getStartsAt();
+        Instant ends = quiz.getEndsAt();
+        if (starts != null && now.isBefore(starts)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Exam has not started yet. Opens at " + starts);
+        }
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Exam window has closed" + (ends == null ? "" : " at " + ends));
+    }
+
+    private boolean isExamOutsideWindow(Quiz quiz) {
+        QuizKind kind = quiz.getKind() == null ? QuizKind.PRACTICE : quiz.getKind();
+        if (kind != QuizKind.EXAM) {
+            return false;
+        }
+        Instant now = Instant.now();
+        Instant starts = quiz.getStartsAt();
+        Instant ends = quiz.getEndsAt();
+        if (starts != null && now.isBefore(starts)) {
+            return true;
+        }
+        if (ends != null && now.isAfter(ends)) {
+            return true;
+        }
+        return false;
+    }
+
     private Quiz saveNew(
             UUID userId, UUID classroomId, String title, List<Map<String, Object>> questions, QuizStatus status) {
         try {
@@ -213,6 +366,7 @@ public class QuizService {
             quiz.setTitle(title.trim());
             quiz.setQuestionsJson(objectMapper.writeValueAsString(questions));
             quiz.setStatus(status);
+            quiz.setKind(QuizKind.PRACTICE);
             quiz.setCreatedBy(userId);
             return quizzes.save(quiz);
         } catch (JsonProcessingException e) {

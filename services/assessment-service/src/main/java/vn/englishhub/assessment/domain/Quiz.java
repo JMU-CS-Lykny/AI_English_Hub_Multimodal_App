@@ -23,6 +23,19 @@ public class Quiz {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private QuizStatus status = QuizStatus.DRAFT;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    private QuizKind kind = QuizKind.PRACTICE;
+    @Column(name = "starts_at")
+    private Instant startsAt;
+    @Column(name = "ends_at")
+    private Instant endsAt;
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+    @Column(name = "reminder_minutes_before")
+    private Integer reminderMinutesBefore;
+    @Column(name = "source_label", length = 255)
+    private String sourceLabel;
     @Column(name = "created_by", nullable = false)
     private UUID createdBy;
     @Column(name = "created_at", nullable = false)
@@ -38,6 +51,20 @@ public class Quiz {
     public void setQuestionsJson(String questionsJson) { this.questionsJson = questionsJson; }
     public QuizStatus getStatus() { return status; }
     public void setStatus(QuizStatus status) { this.status = status; }
+    public QuizKind getKind() { return kind; }
+    public void setKind(QuizKind kind) { this.kind = kind; }
+    public Instant getStartsAt() { return startsAt; }
+    public void setStartsAt(Instant startsAt) { this.startsAt = startsAt; }
+    public Instant getEndsAt() { return endsAt; }
+    public void setEndsAt(Instant endsAt) { this.endsAt = endsAt; }
+    public Integer getDurationMinutes() { return durationMinutes; }
+    public void setDurationMinutes(Integer durationMinutes) { this.durationMinutes = durationMinutes; }
+    public Integer getReminderMinutesBefore() { return reminderMinutesBefore; }
+    public void setReminderMinutesBefore(Integer reminderMinutesBefore) {
+        this.reminderMinutesBefore = reminderMinutesBefore;
+    }
+    public String getSourceLabel() { return sourceLabel; }
+    public void setSourceLabel(String sourceLabel) { this.sourceLabel = sourceLabel; }
     public UUID getCreatedBy() { return createdBy; }
     public void setCreatedBy(UUID createdBy) { this.createdBy = createdBy; }
     public Instant getCreatedAt() { return createdAt; }

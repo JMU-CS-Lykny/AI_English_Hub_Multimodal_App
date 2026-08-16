@@ -1,10 +1,29 @@
 server:
   port: ${SERVER_PORT:8082}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+  # Chat attachments are base64/data-URL in JSON; allow ~5MB images after encoding overhead.
+  tomcat:
+    max-http-form-post-size: 16MB
+    max-swallow-size: 16MB
+  error:
+    include-message: always
+    include-binding-errors: always
 spring:
   application:
     name: classroom-service
+  servlet:
+    multipart:
+      max-file-size: 16MB
+      max-request-size: 16MB
+  # Defensive: if any WebFlux codecs are used for large JSON bodies.
+  codec:
+    max-in-memory-size: 16MB
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/classroom_db}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/classroom_db?characterEncoding=UTF-8}
     username: ${SPRING_DATASOURCE_USERNAME:englishhub}
     password: ${SPRING_DATASOURCE_PASSWORD:englishhub}
   jpa:

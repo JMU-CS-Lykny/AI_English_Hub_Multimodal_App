@@ -7,4 +7,6 @@ import vn.englishhub.assessment.domain.QuizAttempt;
 
 public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> {
     List<QuizAttempt> findByQuizIdOrderBySubmittedAtDesc(UUID quizId);
+
+    boolean existsByQuizIdAndStudentId(UUID quizId, UUID studentId);
 }

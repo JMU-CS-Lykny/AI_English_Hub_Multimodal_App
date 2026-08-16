@@ -67,11 +67,12 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
                     .parseSignedClaims(token)
                     .getPayload();
 
+            // X-User-Name must be ASCII-safe: raw UTF-8 Vietnamese becomes "?" in servlet headers.
             ServerHttpRequest mutated = request.mutate()
                     .header("X-User-Id", claims.getSubject())
                     .header("X-User-Email", String.valueOf(claims.get("email")))
                     .header("X-User-Role", String.valueOf(claims.get("role")))
-                    .header("X-User-Name", String.valueOf(claims.get("name")))
+                    .header("X-User-Name", UserHeaderEncoding.encode(String.valueOf(claims.get("name"))))
                     .build();
             return chain.filter(exchange.mutate().request(mutated).build());
         } catch (Exception ex) {
@@ -87,13 +88,18 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
         }
         // EventSource cannot set Authorization header — allow query token for SSE
         String path = request.getURI().getPath();
-        if (path.startsWith("/api/v1/notifications/stream")) {
+        if (path.startsWith("/api/v1/notifications/stream") || isClassroomChatStream(path)) {
             String q = request.getQueryParams().getFirst("access_token");
             if (q != null && !q.isBlank()) {
                 return q;
             }
         }
         return null;
+    }
+
+    /** Matches /api/v1/classrooms/{id}/chat/stream */
+    private boolean isClassroomChatStream(String path) {
+        return path != null && path.matches("^/api/v1/classrooms/[^/]+/chat/stream$");
     }
 
     private boolean isPublic(String path) {

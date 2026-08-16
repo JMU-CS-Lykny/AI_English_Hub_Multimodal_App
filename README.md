@@ -2,11 +2,11 @@
 
 Production-oriented EduTech monorepo for Vietnamese students learning English (and school subjects) with multimodal AI.
 
-**Stack:** Next.js · Spring Boot microservices · PostgreSQL · Redis · Kafka · Qdrant · Ollama · LangGraph · LlamaIndex-style RAG · Docker · SSE realtime notifications
+**Stack:** Next.js · Spring Boot microservices · PostgreSQL · Redis · Kafka · Qdrant · Ollama · LangGraph · LlamaIndex-style RAG · Docker · SSE (inbox + classroom chat + tutor stream)
 
 ## Demo screenshots
 
-Captured from the local Docker stack (`localhost:3000`) against the current home-hub UX. Regenerate (stack must be up):
+Captured from the local Docker stack (`localhost:3000`). Regenerate (stack must be up):
 
 ```powershell
 npm install --no-save playwright@1.49.0
@@ -20,37 +20,53 @@ node scripts/capture-demo-screens.mjs
 
 ![Login page with demo accounts](docs/demo/02-login.png)
 
+![Register — email + password, defaults to STUDENT](docs/demo/03-register.png)
+
 ### Home hub (teacher)
 
 After login, both roles land on **`/home`** (left rail). `/dashboard` redirects here. Classroom list pages `/teacher/classrooms` and `/student/classrooms` redirect to `/home?tab=classrooms`.
 
-![Teacher home overview — left rail + welcome tiles](docs/demo/03-teacher-dashboard.png)
+![Teacher home overview — left rail + welcome tiles](docs/demo/04-teacher-dashboard.png)
 
-![Teacher classrooms — horizontal cards with cover, subjects, knowledge chips, stats, and invite codes](docs/demo/04-teacher-classrooms.png)
+![Teacher classrooms — horizontal cards with cover, subjects, knowledge chips, stats, invite codes, and Phòng chat](docs/demo/05-teacher-classrooms.png)
 
 ### Realtime notifications (SSE)
 
-Teacher inbox with one-click **Accept / Reject** on join requests (no reason prompt). Refresh and mark-read are icon actions; long lists use pagination.
+Teacher inbox with one-click **Accept / Reject** on join requests (no reason prompt). Refresh and mark-read are icon actions; long lists use pagination. Students also receive **exam scheduled / starting soon** reminders.
 
-![Realtime notification panel with join request Accept/Reject](docs/demo/05-notifications.png)
+![Realtime notification panel with join request Accept/Reject](docs/demo/06-notifications.png)
+
+### Classroom chat (teacher)
+
+One room per class. Text (unbounded length), attachments, emoji, pin, edit own messages, shadcn delete confirm (teacher/admin). Live via SSE.
+
+![Teacher classroom chat — bubbles, media, composer](docs/demo/07-teacher-classroom-chat.png)
+
+### Quizzes (teacher)
+
+![Teacher quiz authoring — draft → publish, AI + Excel, Phòng chat](docs/demo/08-teacher-quizzes.png)
 
 ### Home hub (student)
 
-![Student home overview — classrooms, join, AI Mascot tiles](docs/demo/06-student-dashboard.png)
+![Student home overview — classrooms, join, AI Mascot tiles](docs/demo/09-student-dashboard.png)
 
-![Student classrooms card grid](docs/demo/07-student-classrooms.png)
+![Student classrooms card grid](docs/demo/10-student-classrooms.png)
 
-![AI Mascot — app support / class-bound multimodal chat](docs/demo/08-ai-tutor.png)
+![AI Mascot — app support / class-bound multimodal chat](docs/demo/11-ai-tutor.png)
 
-![Account profile — name, email, grade, avatar](docs/demo/09-account.png)
+![Account profile — name, email, grade, avatar](docs/demo/12-account.png)
 
-### Quizzes & exams
+### Classroom chat (student)
 
-![Teacher quiz authoring — draft → publish, AI + Excel](docs/demo/10-teacher-quizzes.png)
+Same room as the teacher. Students can send, react, pin, and edit their own messages (delete is teacher/admin only).
 
-![Student classroom — lessons and published exams](docs/demo/11-student-classroom.png)
+![Student classroom chat](docs/demo/13-student-classroom-chat.png)
 
-![Student exam — one question per screen, classroom cover background](docs/demo/12-student-exam.png)
+### Classroom & exams (student)
+
+![Student classroom — lessons, published exams, Phòng chat](docs/demo/14-student-classroom.png)
+
+![Student exam — one question per screen, classroom cover background](docs/demo/15-student-exam.png)
 
 ## Product UX (current)
 
@@ -82,20 +98,41 @@ Horizontal cards show: **cover**, **title**, **description**, **level** (CEFR / 
 
 Teachers open a class → quiz authoring; students open a class → lessons, published exams, tutor deep-link.
 
+**Classroom chat** (one room per class — teacher + enrolled students):
+
+- Teacher: **Phòng chat** from home classroom cards, `/teacher/classrooms/[id]/quizzes`, or `/teacher/classrooms/[id]/chat`
+- Student: **Phòng chat** from home cards, `/student/classrooms/[id]`, or `/student/classrooms/[id]/chat`
+- Unbounded text (composer + edit auto-grow); image / video / file attachments (data-URL MVP, ~3–5MB)
+- Emoji picker in composer; emoji reactions (quick set + full list)
+- Pin / unpin (any member); **edit own** messages; **soft-delete** (TEACHER/ADMIN) with shadcn **AlertDialog** confirm (not `window.confirm`)
+- UTF-8 display names via gateway `X-User-Name` encoding
+- Live updates via classroom SSE (`message` / `message_edited` / `pin` / `message_deleted` / `reaction`) + short poll fallback
+
 ### Quizzes / exams
+
+Three **kinds** on `Quiz.kind` (API / DB):
+
+| Kind | Label | Behavior |
+|---|---|---|
+| **EXAM** | Bài kiểm tra | Timed window (`startsAt` + `durationMinutes` → `endsAt`); reminder minutes before start; one graded attempt; student UI shows lock / countdown until open |
+| **PRACTICE** | Luyện tập | Anytime classic MCQ take UI |
+| **GAME** | *(legacy)* | Kept in the API enum for existing rows; product UI treats it like **PRACTICE** (classic take-exam). Teachers can no longer create GAME quizzes. |
+
+Question banks are **internal + AI** styled after THPT / HSA-style subjects (inspired by [tailieuonthi.org](https://tailieuonthi.org/) and [nganhangdethi.org](https://www.nganhangdethi.org/)). Attribution may appear as `sourceLabel` / generate-quiz `attribution` — **no live PDF scrape**.
 
 **Teacher** (`/teacher/classrooms/[id]/quizzes`):
 
+- Kind picker (**EXAM** / **PRACTICE**) + EXAM schedule fields (start, duration, reminder)
 - Create/edit **draft** quizzes; **Publish** is a separate action (students only see `PUBLISHED`)
-- **AI MCQ generate** via `/api/v1/ai/generate-quiz` (fast heuristic by default; Ollama optional)
+- **AI MCQ generate** via `/api/v1/ai/generate-quiz` with `kind` (fast heuristic by default; Ollama optional)
 - **Excel** `.xlsx` **import** (→ draft) and **export**
-- Bulk / single delete; view attempt results; optional **delete classroom** (cascades quizzes)
+- List badges by kind + status; bulk / single delete; attempt results; optional **delete classroom**
 
-**Student** (`/student/classrooms/[id]/quizzes/[quizId]`):
+**Student** (`/student/classrooms/[id]` and `.../quizzes/[quizId]`):
 
-- One question per screen (Tiếp / Trước / Nộp bài)
-- Classroom **cover as exam background**
-- **Fireworks** overlay when score equals max score
+- Kind badges; EXAM locked / countdown until `startsAt`, closed after `endsAt` (server also time-gates)
+- **PRACTICE / EXAM** (and legacy **GAME**): one question per screen (Tiếp / Trước / Nộp bài), classroom cover background, fireworks on perfect score
+- Inbox: **exam scheduled** when the teacher publishes an EXAM; **starting soon** reminder (`reminderMinutesBefore`)
 
 ### AI Mascot / Tutor
 
@@ -184,9 +221,10 @@ Full Swagger guide: [`docs/swagger.md`](docs/swagger.md)
 1. Login as **teacher** → `/home` → **Lớp học** → create classroom (AI subject/knowledges + cover) → **copy invite code**
 2. Login as **student** → `/home` → **Tham gia** → join with invite code
 3. Teacher **Accept / Reject** from the **notification bell** (or pending join list)
-4. Teacher opens class → create quiz (AI generate and/or Excel) → **save draft** → **Publish**
-5. Student opens class → take exam (one question per screen) → perfect score shows fireworks
-6. Student opens **AI Mascot** (or `/student/tutor`) — app help or class-bound multimodal chat
+4. Teacher opens class → create quiz (**EXAM / PRACTICE** + AI generate and/or Excel) → **save draft** → **Publish** (EXAM needs start + duration)
+5. Open **Phòng chat** (teacher + student) — send text/attachments, react, pin, edit; teacher can delete via the confirm dialog
+6. Student opens class → take PRACTICE/EXAM (one question per screen) → perfect score shows fireworks
+7. Student opens **AI Mascot** (or `/student/tutor`) — app help or class-bound multimodal chat
 
 ### Ops tips
 
@@ -205,23 +243,28 @@ docker compose up -d
 
 ## Services
 
-| Layer | Service | Port (internal) | Role |
+Compose inventory (`docker-compose.yml`):
+
+| Layer | Service | Port | Role |
 |---|---|---|---|
-| Edge | `gateway` | 8080 | JWT, routing, Swagger aggregation, SSE proxy |
-| Web | `apps/web` | 3000 | Next.js home hub + teacher/student deep routes |
-| Domain | `identity-service` | 8081 | Auth, JWT, profile, Redis sessions |
-| Domain | `classroom-service` | 8082 | Classrooms, invite codes, join requests, members |
+| Edge | `gateway` | **8080** | JWT, routing, Swagger aggregation, SSE proxy (inbox / chat / tutor), 16MB JSON codec |
+| Web | `web` (`apps/web`) | **3000** | Next.js home hub + teacher/student deep routes (chat, quizzes, exam, tutor) |
+| Domain | `identity-service` | 8081 | Auth, JWT, profile (`/me`, `/profile`), Redis sessions |
+| Domain | `classroom-service` | 8082 | Classrooms, invite codes, join requests, members, **per-class chat** (Postgres + SSE hub) |
 | Domain | `content-service` | 8083 | Lessons + publish lifecycle |
-| Domain | `assessment-service` | 8084 | Quizzes (draft/publish), Excel, attempts |
-| Domain | `notification-service` | 8085 | Inbox + SSE; Kafka consumer on `classroom.events` |
+| Domain | `assessment-service` | 8084 | Quizzes (EXAM/PRACTICE, draft/publish, Excel, attempts); calls classroom for exam student IDs |
+| Domain | `notification-service` | **8085** | Inbox + SSE; Kafka on `classroom.events` + `assessment.events`; exam reminder scheduler |
 | AI | `ai-orchestration` | 8090 | LangGraph tutor, detect-subject, generate-quiz, multimodal façade |
 | AI | `ai-rag` | 8091 | Chunk/embed + Qdrant retrieval |
 | AI | `ai-multimodal` | 8092 | STT / vision / image / video helpers |
-| Models | `ollama` (+ `ollama-init`) | 11434 | Private LLM / embeddings (`llama3.2`, `llama3.2:1b`, `nomic-embed-text`) |
-| Data | Postgres / Redis / Kafka / Qdrant | — | Persistence, cache, events, vectors |
-| Optional | MinIO (`storage` profile) | 9000/9001 | S3-compatible object storage |
+| Models | `ollama` (+ `ollama-init`) | **11434** | Private LLM / embeddings (`llama3.2`, `llama3.2:1b`, `nomic-embed-text`) |
+| Data | `postgres` | **5432** | One DB per service (`identity_db`, `classroom_db`, …) |
+| Data | `redis` | **6379** | Identity refresh/session |
+| Data | `kafka` + `zookeeper` | **9092** / 2181 | Domain events |
+| Data | `qdrant` | **6333** | Vector search (`lesson_chunks`) |
+| Optional | `minio` (profile `storage`) | **9000** / **9001** | S3-compatible object storage |
 
-Planned later: `game-service`, `progress-service`, `media-service` (see [`services/README.md`](services/README.md)).
+Planned later: `game-service`, `progress-service`, `media-service` (see [`services/README.md`](services/README.md)). Postgres already creates placeholder DBs `progress_db` / `media_db` / `rag_meta_db`.
 
 ## Service techniques
 
@@ -231,11 +274,11 @@ How each service works and the techniques it uses.
 
 | Technique | Where | Purpose |
 |---|---|---|
-| **API Gateway + JWT** | `gateway` | Single public entry (`:8080`); validates JWT; injects `X-User-Id` / `X-User-Role` |
+| **API Gateway + JWT** | `gateway` | Single public entry (`:8080`); validates JWT; injects `X-User-Id` / `X-User-Role` / `X-User-Name` (UTF-8 safe) |
 | **Database-per-service** | Postgres DBs | Isolation per bounded context (`identity_db`, `classroom_db`, …) — see [ADR 0001](docs/adr/0001-database-per-service.md) |
 | **Flyway migrations** | Java services | Schema versioning per service |
-| **Kafka domain events** | classroom / content / assessment → notification / RAG | Async decoupling for join approvals, enrollments, indexing |
-| **SSE (Server-Sent Events)** | notification-service ↔ web; tutor stream | Realtime inbox push; streaming tutor tokens |
+| **Kafka domain events** | classroom / content / assessment → notification / RAG | Async decoupling for join approvals, enrollments, exam reminders, indexing |
+| **SSE (Server-Sent Events)** | notification inbox; **classroom chat**; tutor stream | Realtime push; chat uses `access_token` query (EventSource cannot send `Authorization`) |
 | **Ollama (private LLM)** | AI plane | Local models; **not** exposed via the public gateway |
 | **Docker Compose** | whole stack | One-command local runtime; detached start + log rotation |
 
@@ -248,7 +291,8 @@ Browser (Next.js)
 Spring Cloud Gateway  ──JWT──►  Domain services (Java)
                                      │ Kafka
                                      ▼
-                              notification-service (SSE fan-out)
+                              notification-service (inbox SSE + exam reminders)
+                              classroom-service (chat SSE hub)
 AI Tutor ──► gateway /api/v1/ai/** ──► ai-orchestration (LangGraph)
                                             ├─ ai-rag (Qdrant)
                                             ├─ ai-multimodal (STT / vision / image / video)
@@ -257,16 +301,17 @@ AI Tutor ──► gateway /api/v1/ai/** ──► ai-orchestration (LangGraph)
 
 ### `apps/web` — Next.js portals
 
-- **Technique:** App Router, client auth (`localStorage` JWT), role-aware **home hub** (`/home`) plus deep routes (`/teacher/classrooms/[id]/quizzes`, `/student/tutor`, take-exam).
-- **Realtime:** `EventSource` to `/api/v1/notifications/stream?access_token=…` (SSE cannot send `Authorization` headers reliably).
-- **UX:** Horizontal classroom cards; create-classroom modal (detect-subject, cover crop); quiz authoring (AI + Excel); one-question exam + fireworks; Account profile; register email/password only; client pagination.
+- **Technique:** App Router, client auth (`localStorage` JWT), role-aware **home hub** (`/home`) plus deep routes (`/teacher/classrooms/[id]/quizzes`, `/teacher/classrooms/[id]/chat`, `/student/classrooms/[id]/chat`, `/student/tutor`, take-exam).
+- **Realtime:** `EventSource` to `/api/v1/notifications/stream?access_token=…` and `/api/v1/classrooms/{id}/chat/stream?access_token=…`.
+- **UX:** Horizontal classroom cards + **Phòng chat**; create-classroom modal (detect-subject, cover crop); quiz authoring (kinds + AI + Excel); classroom chat (unbounded textarea, emoji, pin, edit, shadcn delete dialog); classic one-question exam UI; fireworks; Account profile; register email/password only; client pagination.
 - **AI assist (client):** Subject + knowledges via `/api/v1/ai/detect-subject`; quiz MCQ via `/api/v1/ai/generate-quiz`; tutor stream + image/video/stt/vision helpers in `lib/api.ts`.
 
 ### `gateway` — Spring Cloud Gateway
 
-- **Technique:** Reactive gateway routes `/api/v1/**` to internal services; OpenAPI aggregation for Swagger UI.
-- **Security:** JWT validation at the edge; downstream services trust gateway headers on the Docker network.
-- **SSE-aware:** Proxies long-lived `/api/v1/notifications/stream` and `/api/v1/ai/tutor/stream` connections.
+- **Technique:** Reactive gateway routes `/api/v1/**` to internal services; OpenAPI aggregation for Swagger UI (`01-identity` … `08-ai-multimodal`).
+- **Security:** JWT validation at the edge; downstream services trust gateway headers on the Docker network (`X-User-Id`, `X-User-Role`, UTF-8 `X-User-Name`).
+- **SSE-aware:** Proxies long-lived `/api/v1/notifications/stream`, `/api/v1/classrooms/*/chat/stream`, and `/api/v1/ai/tutor/stream`.
+- **Payloads:** `spring.codec.max-in-memory-size: 16MB` so chat attachments (base64 data-URLs) are not truncated.
 
 ### `identity-service`
 
@@ -277,16 +322,18 @@ AI Tutor ──► gateway /api/v1/ai/** ──► ai-orchestration (LangGraph)
 
 ### `classroom-service`
 
-- **Technique:** CRUD classrooms, invite codes, **join-request workflow** (request → Accept/Reject → membership), **members list**.
+- **Technique:** CRUD classrooms, invite codes, **join-request workflow** (request → Accept/Reject → membership), **members list**, **per-classroom chat**.
+- **Chat:** Messages + attachments + reactions + pin + edit + soft-delete; in-memory `ChatSseHub`; Flyway `V3+` (`classroom_chat` tables).
 - **Kafka producer:** Emits `join_request.created|accepted|rejected`, `student.enrolled`, `classroom.created` on `classroom.events`.
-- **Authz:** Teacher owns Accept/Reject for their classrooms; students create join requests by invite code.
+- **Authz:** Teacher owns Accept/Reject for their classrooms; students create join requests by invite code; chat requires teacher ownership or student membership (ADMIN bypass). Delete messages: TEACHER/ADMIN. Edit: sender only.
 
 ### `notification-service` — realtime inbox
 
 - **Technique:** Persist inbox rows in Postgres; expose REST list / unread-count / mark-read / mark-all-read.
-- **Kafka consumer:** Listens to `classroom.events` and creates notifications for teachers (join requests) and students (accepted/rejected).
+- **Kafka consumer:** Listens to `classroom.events` (join requests) and `assessment.events` (`quiz.exam.scheduled`).
 - **Realtime delivery:** In-memory `SseHub` with `SseEmitter` per user; events `connected`, `notification`, `unread`.
 - **Inbox actions:** Teachers can **Accept / Reject** join requests from the bell via `POST /api/v1/notifications/join-requests/{id}/resolve`.
+- **Exam reminders:** On EXAM publish, notifies enrolled students immediately, then a delayed “starting soon” via `ExamReminderScheduler`.
 - **Why SSE:** One-way push fits inbox UX; simpler than WebSocket for this use case — see [ADR 0003](docs/adr/0003-join-approval-notifications.md).
 
 ### `content-service`
@@ -296,9 +343,10 @@ AI Tutor ──► gateway /api/v1/ai/** ──► ai-orchestration (LangGraph)
 
 ### `assessment-service`
 
-- **Technique:** Quizzes per classroom with **DRAFT / PUBLISHED** lifecycle; MCQ + short answers; attempt grading on submit.
+- **Technique:** Quizzes per classroom with **DRAFT / PUBLISHED** lifecycle and kinds **EXAM / PRACTICE** (plus legacy **GAME** in the API enum); schedule + `sourceLabel`; MCQ + short answers; attempt grading on submit; EXAM student time-gate.
 - **Authoring:** Create/update draft, publish, delete (attempts cascade), Excel import/export (`.xlsx`).
-- **Kafka:** Emits quiz lifecycle events for progress / downstream consumers.
+- **Classroom client:** On EXAM publish, loads member student IDs from `classroom-service` and emits `quiz.exam.scheduled` on `assessment.events`.
+- **Kafka:** Emits quiz lifecycle events for notifications / downstream consumers.
 
 ### AI plane (`ai/*`) — see [ADR 0002](docs/adr/0002-ai-capability-plane.md)
 
@@ -322,14 +370,14 @@ AI Tutor ──► gateway /api/v1/ai/** ──► ai-orchestration (LangGraph)
 ## Repository layout
 
 ```text
-apps/web                 Next.js portals (home hub / teacher / student / tutor)
+apps/web                 Next.js portals (home hub / teacher / student / tutor / classroom chat)
 gateway                  Spring Cloud Gateway (JWT + routing + Swagger hub)
 services/*               Domain Spring Boot services
 ai/*                     LangGraph / RAG / multimodal Python sidecars
 packages/events          Event JSON schemas
 infra/                   Postgres init, Kafka topics
 docs/adr                 Architecture decision records
-docs/demo                README demo screenshots
+docs/demo                README demo screenshots (Playwright)
 scripts/                 Docker helpers + capture-demo-screens.mjs
 docker-compose.yml       Local full stack
 .github/workflows/ci.yml Web typecheck/build · Maven · Python compile
@@ -352,6 +400,14 @@ docker-compose.yml       Local full stack
 | GET | `/api/v1/classrooms/{id}/join-requests` | classroom (teacher pending) |
 | GET | `/api/v1/classrooms/join-requests/mine` | classroom (student) |
 | POST | `/api/v1/classrooms/join-requests/{id}/accept\|reject` | classroom |
+| GET | `/api/v1/classrooms/{id}/chat/messages` | classroom (paginated history; `before`, `limit`; includes pinned strip) |
+| POST | `/api/v1/classrooms/{id}/chat/messages` | classroom (text + optional attachments) |
+| PATCH | `/api/v1/classrooms/{id}/chat/messages/{messageId}` | classroom (edit own text) |
+| POST | `/api/v1/classrooms/{id}/chat/messages/{messageId}/pin` | classroom (toggle pin) |
+| DELETE | `/api/v1/classrooms/{id}/chat/messages/{messageId}/pin` | classroom (unpin) |
+| DELETE | `/api/v1/classrooms/{id}/chat/messages/{messageId}` | classroom (**TEACHER/ADMIN** soft-delete) |
+| POST | `/api/v1/classrooms/{id}/chat/messages/{messageId}/reactions` | classroom (emoji toggle) |
+| GET | `/api/v1/classrooms/{id}/chat/stream` | classroom (**SSE** live updates) |
 | GET | `/api/v1/notifications` | notification (inbox) |
 | GET | `/api/v1/notifications/unread-count` | notification |
 | POST | `/api/v1/notifications/{id}/read` | notification |
@@ -391,10 +447,11 @@ uvicorn app.main:app --reload --port 8090
 
 ## Architecture notes
 
-- Gateway validates JWT and forwards `X-User-Id` / `X-User-Role`
+- Gateway validates JWT and forwards `X-User-Id` / `X-User-Role` / `X-User-Name`
 - Domain services trust gateway headers (internal network)
 - Join approvals are **request → teacher decision → membership**, with Kafka + SSE notifications
-- Quizzes are **draft → publish**; students only attempt published exams
+- Quizzes are **draft → publish**; students only attempt published exams; EXAM publish fans out reminders
+- Classroom chat is **one room per class** with SSE + poll fallback
 - Tutor / mascot is **class-bound** (Theo lớp) with multimodal stream endpoints behind the gateway
 - Ollama is **not** publicly routed
 
@@ -407,9 +464,10 @@ See `docs/adr` for deeper decisions.
 | 0–1 Foundation (compose, identity, gateway, web shell) | Implemented |
 | 2 Teaching core (classroom, content, assessment + Excel/AI quizzes) | Implemented (MVP) |
 | 3 AI plane (LangGraph + RAG + multimodal tutor/mascot) | Implemented (MVP) |
-| 4 Notifications (Kafka + SSE inbox, join Accept/Reject) | Implemented (MVP) |
+| 4 Notifications (Kafka + SSE inbox, join Accept/Reject, exam reminders) | Implemented (MVP) |
 | 5 Home hub UX (rail tabs, account, register defaults, pagination) | Implemented (MVP) |
-| 6 Games, progress analytics, K8s hardening | Scaffold / next |
+| 6 Classroom chat (SSE room, attachments, pin/edit/react, shadcn delete) | Implemented (MVP) |
+| 7 Games, progress analytics, K8s hardening | Scaffold / next |
 
 ## License
 

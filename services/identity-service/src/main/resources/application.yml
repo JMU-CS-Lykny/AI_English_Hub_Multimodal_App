@@ -1,11 +1,16 @@
 server:
   port: ${SERVER_PORT:8081}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
 
 spring:
   application:
     name: identity-service
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/identity_db}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/identity_db?characterEncoding=UTF-8}
     username: ${SPRING_DATASOURCE_USERNAME:englishhub}
     password: ${SPRING_DATASOURCE_PASSWORD:englishhub}
   jpa:

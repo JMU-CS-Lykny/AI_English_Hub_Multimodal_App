@@ -10,7 +10,6 @@ import { getClassroomMeta, subjectLabel } from "@/lib/classroomMeta";
 import type { Classroom, ClassroomMember, Quiz, User } from "@/lib/types";
 
 const PAGE_SIZE = 6;
-const MAX_TOPIC_CHIPS = 5;
 
 function asArray<T>(data: T | T[] | null | undefined): T[] {
   if (!data) return [];
@@ -255,8 +254,6 @@ export default function ClassroomsPanel({ user }: ClassroomsPanelProps) {
                   return label.toLowerCase() !== (subjectText ?? "").trim().toLowerCase();
                 }),
               ];
-              const visibleTopics = topicChips.slice(0, MAX_TOPIC_CHIPS);
-              const extraTopics = topicChips.length - visibleTopics.length;
               const card = stats[c.id];
               const studentLabel =
                 card?.loading && canListMembers
@@ -292,11 +289,11 @@ export default function ClassroomsPanel({ user }: ClassroomsPanelProps) {
                             {level || "—"}
                           </span>
                         </span>
-                        {visibleTopics.length > 0 && (
+                        {topicChips.length > 0 && (
                           <span className="home-class-card-topics" aria-label="Chủ đề">
-                            {visibleTopics.map((topic, i) => (
+                            {topicChips.map((topic, i) => (
                               <span
-                                key={topic}
+                                key={`${topic}-${i}`}
                                 className={`home-class-topic-chip${
                                   showSubjectChip && i === 0
                                     ? " home-class-topic-chip--subject"
@@ -306,11 +303,6 @@ export default function ClassroomsPanel({ user }: ClassroomsPanelProps) {
                                 {topic}
                               </span>
                             ))}
-                            {extraTopics > 0 && (
-                              <span className="home-class-topic-chip home-class-topic-chip--more">
-                                +{extraTopics}
-                              </span>
-                            )}
                           </span>
                         )}
                         <span className="home-class-card-desc">
@@ -367,6 +359,17 @@ export default function ClassroomsPanel({ user }: ClassroomsPanelProps) {
                         </button>
                       </div>
                     )}
+                    <Link
+                      href={
+                        isStudent
+                          ? `/student/classrooms/${c.id}/chat`
+                          : `/teacher/classrooms/${c.id}/chat`
+                      }
+                      className="home-class-card-chat"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Phòng chat
+                    </Link>
                   </div>
                   {canManage && (
                     <button

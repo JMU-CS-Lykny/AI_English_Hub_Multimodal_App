@@ -26,6 +26,29 @@ async function shot(page, name) {
   console.log("wrote", name);
 }
 
+async function logout(context, page) {
+  await context.clearCookies();
+  await page.evaluate(() => localStorage.clear());
+}
+
+async function openFirstClassroomChat(page, role) {
+  const href =
+    role === "student"
+      ? 'a.home-class-card-chat[href*="/student/classrooms/"]'
+      : 'a.home-class-card-chat[href*="/teacher/classrooms/"]';
+  const chatLink = page.locator(href).first();
+  if (!(await chatLink.count())) {
+    console.log(`skip classroom chat (${role}: no Phòng chat link)`);
+    return false;
+  }
+  await chatLink.click();
+  await page.waitForTimeout(2200);
+  await page.waitForSelector(".classroom-chat, .empty-state, .alert", {
+    timeout: 20000,
+  }).catch(() => {});
+  return true;
+}
+
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -40,74 +63,83 @@ async function main() {
   await goto(page, `${base}/login`);
   await shot(page, "02-login.png");
 
+  await goto(page, `${base}/register`);
+  await shot(page, "03-register.png");
+
   await login(page, "teacher@englishhub.vn", "Password123!");
-  await shot(page, "03-teacher-dashboard.png");
+  await shot(page, "04-teacher-dashboard.png");
 
   await goto(page, `${base}/home?tab=classrooms`);
   await page.waitForSelector(".home-rail, .home-class-card, .empty-state", { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(1200);
-  await shot(page, "04-teacher-classrooms.png");
+  await shot(page, "05-teacher-classrooms.png");
 
   const bell = page.locator('button[aria-label="Thông báo"]');
   if (await bell.count()) {
     await bell.click();
     await page.waitForTimeout(800);
   }
-  await shot(page, "05-notifications.png");
+  await shot(page, "06-notifications.png");
+  if (await bell.count()) {
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+  }
 
-  await context.clearCookies();
-  await page.evaluate(() => localStorage.clear());
+  if (await openFirstClassroomChat(page, "teacher")) {
+    await shot(page, "07-teacher-classroom-chat.png");
+  }
+
+  await goto(page, `${base}/home?tab=classrooms`);
+  await page.waitForTimeout(1500);
+  const quizNav = page.locator("a.home-class-card-link[href*='/teacher/classrooms/']").first();
+  if (await quizNav.count()) {
+    await quizNav.click();
+    await page.waitForTimeout(2000);
+    await shot(page, "08-teacher-quizzes.png");
+  } else {
+    console.log("skip 08-teacher-quizzes (no classroom link)");
+  }
+
+  await logout(context, page);
   await login(page, "student@englishhub.vn", "Password123!");
-  await shot(page, "06-student-dashboard.png");
+  await shot(page, "09-student-dashboard.png");
 
   await goto(page, `${base}/home?tab=classrooms`);
   await page.waitForSelector(".home-rail, .home-class-card, .empty-state", { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(1200);
-  await shot(page, "07-student-classrooms.png");
+  await shot(page, "10-student-classrooms.png");
 
   await goto(page, `${base}/home?tab=mascot`);
   await page.waitForTimeout(1200);
-  await shot(page, "08-ai-tutor.png");
+  await shot(page, "11-ai-tutor.png");
 
   await goto(page, `${base}/home?tab=account`);
   await page.waitForTimeout(1000);
-  await shot(page, "09-account.png");
+  await shot(page, "12-account.png");
 
-  await context.clearCookies();
-  await page.evaluate(() => localStorage.clear());
-  await login(page, "teacher@englishhub.vn", "Password123!");
   await goto(page, `${base}/home?tab=classrooms`);
   await page.waitForTimeout(1500);
-  const openClass = page.locator('a[href*="/teacher/classrooms/"]').first();
-  if (await openClass.count()) {
-    await openClass.click();
-    await page.waitForTimeout(2000);
-    await shot(page, "10-teacher-quizzes.png");
-  } else {
-    console.log("skip 10-teacher-quizzes (no classroom link)");
+  if (await openFirstClassroomChat(page, "student")) {
+    await shot(page, "13-student-classroom-chat.png");
   }
 
-  // Student exam page if a published quiz link exists
-  await context.clearCookies();
-  await page.evaluate(() => localStorage.clear());
-  await login(page, "student@englishhub.vn", "Password123!");
   await goto(page, `${base}/home?tab=classrooms`);
   await page.waitForTimeout(1500);
-  const studentClass = page.locator('a[href*="/student/classrooms/"]').first();
-  if (await studentClass.count()) {
-    await studentClass.click();
+  const classLink = page.locator("a.home-class-card-link[href*='/student/classrooms/']").first();
+  if (await classLink.count()) {
+    await classLink.click();
     await page.waitForTimeout(2000);
-    await shot(page, "11-student-classroom.png");
+    await shot(page, "14-student-classroom.png");
     const quizLink = page.locator('a[href*="/quizzes/"]').first();
     if (await quizLink.count()) {
       await quizLink.click();
       await page.waitForTimeout(2000);
-      await shot(page, "12-student-exam.png");
+      await shot(page, "15-student-exam.png");
     } else {
-      console.log("skip 12-student-exam (no quiz link)");
+      console.log("skip 15-student-exam (no quiz link)");
     }
   } else {
-    console.log("skip 11-student-classroom (no classroom link)");
+    console.log("skip 14-student-classroom (no classroom link)");
   }
 
   await browser.close();

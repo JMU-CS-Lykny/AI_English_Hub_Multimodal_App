@@ -164,7 +164,7 @@ services:
         condition: service_healthy
     environment:
       <<: *java-env
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/identity_db
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/identity_db?characterEncoding=UTF-8
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-englishhub}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-englishhub}
       SPRING_DATA_REDIS_HOST: redis
@@ -184,7 +184,7 @@ services:
         condition: service_healthy
     environment:
       <<: *java-env
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/classroom_db
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/classroom_db?characterEncoding=UTF-8
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-englishhub}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-englishhub}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -222,6 +222,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      classroom-service:
+        condition: service_started
     environment:
       <<: *java-env
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/assessment_db
@@ -229,6 +231,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-englishhub}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SERVER_PORT: 8084
+      CLASSROOM_SERVICE_URL: http://classroom-service:8082
     expose:
       - "8084"
 

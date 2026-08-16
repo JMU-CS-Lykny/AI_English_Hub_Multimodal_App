@@ -21,6 +21,7 @@ import type {
   QuestionType,
   Quiz,
   QuizAttempt,
+  QuizKind,
   QuizQuestion,
   QuizStatus,
 } from "@/lib/types";
@@ -54,6 +55,19 @@ function normalizeQuizStatus(status?: QuizStatus | string | null): QuizStatus {
   return String(status || "DRAFT").toUpperCase() === "PUBLISHED" ? "PUBLISHED" : "DRAFT";
 }
 
+function normalizeQuizKind(kind?: QuizKind | string | null): QuizKind {
+  const k = String(kind || "PRACTICE").toUpperCase();
+  if (k === "EXAM") return "EXAM";
+  // Legacy GAME kind uses classic PRACTICE UX (soccer game removed).
+  return "PRACTICE";
+}
+
+const QUIZ_KIND_LABELS: Record<QuizKind, string> = {
+  EXAM: "Bài kiểm tra",
+  PRACTICE: "Luyện tập",
+  GAME: "Luyện tập",
+};
+
 function QuizStatusBadge({ status }: { status?: QuizStatus | string | null }) {
   const normalized = normalizeQuizStatus(status);
   const isPublished = normalized === "PUBLISHED";
@@ -66,6 +80,31 @@ function QuizStatusBadge({ status }: { status?: QuizStatus | string | null }) {
       {isPublished ? "Đã xuất bản" : "Bản nháp"}
     </span>
   );
+}
+
+function QuizKindBadge({ kind }: { kind?: QuizKind | string | null }) {
+  const normalized = normalizeQuizKind(kind);
+  return (
+    <span className={`quiz-kind-badge quiz-kind-badge--${normalized.toLowerCase()}`}>
+      {QUIZ_KIND_LABELS[normalized]}
+    </span>
+  );
+}
+
+/** datetime-local value from ISO instant (local timezone). */
+function toDatetimeLocalValue(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromDatetimeLocalValue(local: string): string | null {
+  if (!local.trim()) return null;
+  const d = new Date(local);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
 }
 
 function asArray<T>(data: T | T[] | null | undefined): T[] {
@@ -163,6 +202,11 @@ function QuizzesContent() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [titleTouched, setTitleTouched] = useState(false);
+  const [quizKind, setQuizKind] = useState<QuizKind>("PRACTICE");
+  const [startsAtLocal, setStartsAtLocal] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState(45);
+  const [reminderMinutesBefore, setReminderMinutesBefore] = useState(15);
+  const [sourceLabel, setSourceLabel] = useState("");
   const [rows, setRows] = useState<QuizQuestion[]>([emptyRow()]);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -348,6 +392,11 @@ function QuizzesContent() {
     setTitleTouched(false);
     const derivedTopic = topicFromClassroom(classroom);
     setTitle(titleFromClassroom(classroom, selectedLevel));
+    setQuizKind("PRACTICE");
+    setStartsAtLocal("");
+    setDurationMinutes(45);
+    setReminderMinutesBefore(15);
+    setSourceLabel("");
     setRows([emptyRow()]);
     if (derivedTopic) setAiTopic(derivedTopic);
     setAiStyle(styleFromClassroom(isEnglishClass));
@@ -359,10 +408,39 @@ function QuizzesContent() {
     setEditingId(quiz.id);
     setTitleTouched(true);
     setTitle(quiz.title);
+    setQuizKind(normalizeQuizKind(quiz.kind));
+    setStartsAtLocal(toDatetimeLocalValue(quiz.startsAt));
+    setDurationMinutes(quiz.durationMinutes ?? 45);
+    setReminderMinutesBefore(quiz.reminderMinutesBefore ?? 15);
+    setSourceLabel(quiz.sourceLabel || "");
     const parsed = parseQuestions(quiz.questionsJson);
     setRows(parsed.length ? parsed : [emptyRow()]);
     setSuccess("");
     setError("");
+  }
+
+  function quizSchedulePayload() {
+    const payload: {
+      kind: QuizKind;
+      startsAt?: string | null;
+      durationMinutes?: number | null;
+      reminderMinutesBefore?: number | null;
+      sourceLabel?: string | null;
+    } = {
+      kind: quizKind,
+      sourceLabel: sourceLabel.trim() || null,
+    };
+    if (quizKind === "EXAM") {
+      payload.startsAt = fromDatetimeLocalValue(startsAtLocal);
+      payload.durationMinutes = durationMinutes > 0 ? durationMinutes : null;
+      payload.reminderMinutesBefore =
+        reminderMinutesBefore >= 0 ? reminderMinutesBefore : 15;
+    } else {
+      payload.startsAt = null;
+      payload.durationMinutes = null;
+      payload.reminderMinutesBefore = null;
+    }
+    return payload;
   }
 
   function updateRow(index: number, patch: Partial<QuizQuestion>) {
@@ -396,12 +474,21 @@ function QuizzesContent() {
       if (questions.some((q) => q.choices.length < 2)) {
         throw new Error("Mỗi câu trắc nghiệm cần ít nhất 2 lựa chọn (nên 4: A–D)");
       }
+      if (quizKind === "EXAM") {
+        if (!startsAtLocal.trim()) {
+          throw new Error("Bài kiểm tra cần chọn thời gian bắt đầu");
+        }
+        if (!durationMinutes || durationMinutes < 1) {
+          throw new Error("Bài kiểm tra cần thời lượng (phút) hợp lệ");
+        }
+      }
 
+      const schedule = quizSchedulePayload();
       let saved: Quiz;
       if (editingId && editingId !== "new") {
         saved = await apiFetch<Quiz>(`/api/v1/assessments/quizzes/${editingId}`, {
           method: "PUT",
-          body: JSON.stringify({ title: title.trim(), questions }),
+          body: JSON.stringify({ title: title.trim(), questions, ...schedule }),
         });
       } else {
         saved = await apiFetch<Quiz>("/api/v1/assessments/quizzes", {
@@ -410,6 +497,7 @@ function QuizzesContent() {
             classroomId,
             title: title.trim(),
             questions,
+            ...schedule,
           }),
         });
       }
@@ -474,6 +562,7 @@ function QuizzesContent() {
       const requestPayload = {
         classroomId,
         topic,
+        kind: quizKind.toLowerCase(),
         ...(isEnglishClass
           ? { cefrLevel: aiCefr }
           : { classLevel: aiClassLevel }),
@@ -527,6 +616,9 @@ function QuizzesContent() {
           };
         }),
       );
+      if (data.attribution?.trim()) {
+        setSourceLabel(data.attribution.trim());
+      }
       setSuccess(
         source === "ai"
           ? "AI đã tạo câu hỏi (vẫn là nháp) — chỉnh rồi bấm Lưu bản nháp; Xuất bản là bước riêng"
@@ -631,6 +723,12 @@ function QuizzesContent() {
           </p>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <Link
+            href={`/teacher/classrooms/${classroomId}/chat`}
+            className="btn btn-secondary btn-sm"
+          >
+            Phòng chat
+          </Link>
           <button type="button" className="btn btn-primary btn-sm" onClick={startCreate}>
             + Tạo bài kiểm tra
           </button>
@@ -716,9 +814,16 @@ function QuizzesContent() {
                   <div>
                     <h4 style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                       {quiz.title}
+                      <QuizKindBadge kind={quiz.kind} />
                       <QuizStatusBadge status={quiz.status} />
                     </h4>
-                    <p>{parseQuestions(quiz.questionsJson).length} câu</p>
+                    <p>
+                      {parseQuestions(quiz.questionsJson).length} câu
+                      {normalizeQuizKind(quiz.kind) === "EXAM" && quiz.startsAt
+                        ? ` · Bắt đầu ${new Date(quiz.startsAt).toLocaleString("vi-VN")}`
+                        : ""}
+                      {quiz.durationMinutes ? ` · ${quiz.durationMinutes} phút` : ""}
+                    </p>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
@@ -763,6 +868,7 @@ function QuizzesContent() {
               style={{ margin: 0, display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}
             >
               {editingId === "new" ? "Bài kiểm tra mới" : "Chỉnh bài kiểm tra"}
+              <QuizKindBadge kind={quizKind} />
               <QuizStatusBadge status={editorStatus} />
             </h2>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingId(null)}>
@@ -889,6 +995,98 @@ function QuizzesContent() {
                 }
               />
             </div>
+
+            <div className="form-group">
+              <span className="form-label" id="quizKindLabel">
+                Loại đề
+              </span>
+              <div
+                className="quiz-kind-picker"
+                role="radiogroup"
+                aria-labelledby="quizKindLabel"
+              >
+                {(
+                  [
+                    ["EXAM", "Bài kiểm tra", "Có khung giờ + nhắc trước giờ"],
+                    ["PRACTICE", "Luyện tập", "Làm bất cứ lúc nào"],
+                  ] as const
+                ).map(([value, label, hint]) => (
+                  <label
+                    key={value}
+                    className={`quiz-kind-option${quizKind === value ? " quiz-kind-option--active" : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      name="quizKind"
+                      value={value}
+                      checked={quizKind === value}
+                      onChange={() => setQuizKind(value)}
+                    />
+                    <span>
+                      <strong>{label}</strong>
+                      <small>{hint}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {quizKind === "EXAM" && (
+              <div className="quiz-exam-schedule">
+                <div className="form-group">
+                  <label className="form-label" htmlFor="quizStartsAt">
+                    Thời gian bắt đầu
+                  </label>
+                  <input
+                    id="quizStartsAt"
+                    type="datetime-local"
+                    className="form-input"
+                    value={startsAtLocal}
+                    onChange={(e) => setStartsAtLocal(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="quiz-ai-grid">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="quizDuration">
+                      Thời lượng (phút)
+                    </label>
+                    <input
+                      id="quizDuration"
+                      type="number"
+                      min={1}
+                      max={300}
+                      className="form-input"
+                      value={durationMinutes}
+                      onChange={(e) => setDurationMinutes(Number(e.target.value) || 0)}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="quizReminder">
+                      Nhắc trước (phút)
+                    </label>
+                    <input
+                      id="quizReminder"
+                      type="number"
+                      min={0}
+                      max={1440}
+                      className="form-input"
+                      value={reminderMinutesBefore}
+                      onChange={(e) =>
+                        setReminderMinutesBefore(Number(e.target.value) || 0)
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {sourceLabel.trim() && (
+              <p className="quiz-muted" style={{ fontSize: "0.85rem", marginBottom: "0.85rem" }}>
+                Nguồn / phong cách: {sourceLabel}
+              </p>
+            )}
 
             <div className="quiz-table-wrap">
               <table className="quiz-table">
@@ -1079,8 +1277,9 @@ function QuizzesContent() {
         title="Xuất bản bài kiểm tra này cho học sinh?"
         description={
           <p>
-            Học sinh trong lớp sẽ thấy và làm được bài này. Bạn vẫn có thể chỉnh nội dung sau khi
-            xuất bản.
+            {quizKind === "EXAM"
+              ? "Học sinh sẽ nhận thông báo / nhắc giờ và chỉ làm được trong khung thời gian đã đặt."
+              : "Học sinh trong lớp sẽ thấy và làm được bài này. Bạn vẫn có thể chỉnh nội dung sau khi xuất bản."}
           </p>
         }
         confirmLabel="Xuất bản"

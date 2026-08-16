@@ -16,9 +16,10 @@ Use the top-right **Select a definition** dropdown:
 2. `02-classroom`
 3. `03-content`
 4. `04-assessment`
-5. `05-ai-orchestration`
-6. `06-ai-rag`
-7. `07-ai-multimodal`
+5. `05-notification`
+6. `06-ai-orchestration`
+7. `07-ai-rag`
+8. `08-ai-multimodal`
 
 ### Authorize once, call everything
 

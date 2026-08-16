@@ -52,10 +52,24 @@ export async function apiFetch<T>(
   if (!res.ok) {
     let message = `Yêu cầu thất bại (${res.status})`;
     try {
-      const err = (await res.json()) as { message?: string; error?: string };
-      message = err.message || err.error || message;
+      const err = (await res.json()) as {
+        message?: string;
+        error?: string;
+        detail?: string;
+        title?: string;
+      };
+      message =
+        err.message || err.detail || err.error || err.title || message;
+      if (
+        res.status === 413 &&
+        (message.includes("thất bại") || /payload too large/i.test(message))
+      ) {
+        message = "Tệp đính kèm quá lớn. Hãy chọn ảnh nhỏ hơn (~5MB).";
+      }
     } catch {
-      /* use default */
+      if (res.status === 413) {
+        message = "Tệp đính kèm quá lớn. Hãy chọn ảnh nhỏ hơn (~5MB).";
+      }
     }
     throw new ApiError(message, res.status);
   }

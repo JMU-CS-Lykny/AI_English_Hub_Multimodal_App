@@ -2076,6 +2076,11 @@ def _parse_knowledges(raw: str, limit: int = 24) -> list[str]:
     return found
 
 
+QUIZ_BANK_ATTRIBUTION = (
+    "Phong cách đề THPT — tham khảo tailieuonthi.org, nganhangdethi.org"
+)
+
+
 class GenerateQuizRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -2086,6 +2091,8 @@ class GenerateQuizRequest(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
     style_prompt: str | None = Field(default=None, alias="stylePrompt")
     student_context: str | None = Field(default=None, alias="studentContext")
+    # exam | practice | game — affects title wording / difficulty emphasis
+    kind: str | None = None
 
 
 class QuizQuestionOut(BaseModel):
@@ -2103,6 +2110,31 @@ class GenerateQuizResponse(BaseModel):
     title: str
     questions: list[QuizQuestionOut]
     source: str = "heuristic"
+    attribution: str = QUIZ_BANK_ATTRIBUTION
+
+
+def _normalize_quiz_kind(kind: str | None) -> str:
+    k = (kind or "practice").strip().lower()
+    if k in ("exam", "practice", "game"):
+        return k
+    return "practice"
+
+
+def _kind_title_prefix(kind: str) -> str:
+    return {
+        "exam": "Kiểm tra",
+        "practice": "Luyện tập",
+        "game": "Game",
+    }.get(kind, "Luyện tập")
+
+
+def _with_attribution(resp: GenerateQuizResponse) -> GenerateQuizResponse:
+    return GenerateQuizResponse(
+        title=resp.title,
+        questions=resp.questions,
+        source=resp.source,
+        attribution=resp.attribution or QUIZ_BANK_ATTRIBUTION,
+    )
 
 
 _STOPWORDS = {
@@ -2330,10 +2362,146 @@ def _clean_focus_phrase(raw: str, fallback: str) -> str:
     return text[:48]
 
 
+def _thpt_style_english_banks(
+    level: str, focus: str, secondary: str
+) -> list[tuple[str, list[str], str]]:
+    """THPT / HSA-style English MCQs (grammar, vocab, communication) — internal banks only."""
+    focus = _clean_focus_phrase(focus, "education")
+    secondary = _clean_focus_phrase(secondary, "environment")
+    return [
+        (
+            f"Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            f"Students who study {focus} regularly _____ better exam results.",
+            ["achieve", "achieves", "achieving", "to achieve"],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the word whose underlined part "
+            "differs from the other three in pronunciation.\n"
+            "(Choose the odd one out — simulated stem)",
+            ["enough", "through", "rough", "tough"],
+            "B",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            f"If students _____ more about {secondary}, they would protect nature better.",
+            ["knew", "know", "had known", "have known"],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the sentence that is closest in meaning.\n"
+            '"You should revise the vocabulary before the test," the teacher said.',
+            [
+                "The teacher advised us to revise the vocabulary before the test.",
+                "The teacher ordered that we revised vocabulary yesterday.",
+                "The teacher asked if vocabulary was a test.",
+                "The teacher denied revising the vocabulary.",
+            ],
+            "A",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            f"The more you practice {focus}, _____ confident you become.",
+            ["the more", "more", "the most", "most"],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            "She suggested _____ early to avoid traffic on exam day.",
+            ["leaving", "to leave", "leave", "left"],
+            "A",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the word CLOSEST in meaning "
+            f"to the underlined word.\n"
+            f"Protecting the {secondary} is essential for future generations.",
+            ["necessary", "optional", "harmful", "temporary"],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            "By the time the bell rang, the students _____ their answer sheets.",
+            ["had submitted", "submitted", "have submitted", "were submit"],
+            "A",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            f"A talk on {focus} will be _____ in the school hall next Monday.",
+            ["held", "hold", "holding", "to hold"],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the underlined part that needs correction.\n"
+            "Neither the teacher nor the students was ready for the oral exam. "
+            "(Choose the best corrected verb form for agreement.)",
+            ["were", "was", "is", "be"],
+            "A",
+        ),
+        (
+            "Read the short passage and choose the best answer.\n"
+            "Many teenagers prefer online lessons because they can replay difficult parts. "
+            "What is the main advantage mentioned?",
+            [
+                "They can review hard content again.",
+                "They never need a teacher.",
+                "Exams are cancelled.",
+                "Schools close permanently.",
+            ],
+            "A",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            f"It is important that every candidate _____ calm during the {level} English test.",
+            ["remain", "remains", "remaining", "to remain"],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the correct communicative response.\n"
+            'A: "Would you mind sharing your notes on this unit?"\nB: "_____"',
+            [
+                "Not at all. Here you are.",
+                "Yes, I mind very much always.",
+                "I don't have English forever.",
+                "Please calculate the score first.",
+            ],
+            "A",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            f"Projects about {secondary} help students develop teamwork and critical thinking.",
+            [
+                "True — they build both skills.",
+                "False — only teamwork matters.",
+                "False — critical thinking is banned.",
+                "True — but only in mathematics.",
+            ],
+            "A",
+        ),
+        (
+            "Mark the letter A, B, C, or D to indicate the correct answer.\n"
+            "The examiner asked the candidate where _____.",
+            [
+                "she lived",
+                "did she live",
+                "does she live",
+                "she does live",
+            ],
+            "A",
+        ),
+        (
+            f"Mark the letter A, B, C, or D to indicate the word OPPOSITE in meaning.\n"
+            f"A well-prepared talk on {focus} can reduce students' anxiety.",
+            ["increase", "lower", "ease", "calm"],
+            "A",
+        ),
+    ]
+
+
 def _english_esl_banks(level: str, focus: str, secondary: str) -> list[tuple[str, list[str], str]]:
+    """CEFR / classroom ESL banks, prepended with THPT-style stems for VN school exams."""
     focus = _clean_focus_phrase(focus, "everyday English")
     secondary = _clean_focus_phrase(secondary, "communication")
-    return [
+    base = [
         (
             f"Choose the best {level} word to complete: \"I need more _____ about {focus}.\"",
             ["information", "informations", "informate", "informing"],
@@ -2430,6 +2598,7 @@ def _english_esl_banks(level: str, focus: str, secondary: str) -> list[tuple[str
             "A",
         ),
     ]
+    return _thpt_style_english_banks(level, focus, secondary) + base
 
 
 def _history_quiz_banks(
@@ -3094,6 +3263,8 @@ def _subject_quiz_banks(
 def _heuristic_quiz(body: GenerateQuizRequest) -> GenerateQuizResponse:
     topic = (body.topic or "English basics").strip()
     level, is_cefr = _resolve_quiz_level(body)
+    kind = _normalize_quiz_kind(body.kind)
+    kind_prefix = _kind_title_prefix(kind)
     count = max(1, min(int(body.count or 5), 20))
     title_hint, _desc = _split_topic_context(topic)
     keywords = _topic_keywords(topic)
@@ -3104,20 +3275,23 @@ def _heuristic_quiz(body: GenerateQuizRequest) -> GenerateQuizResponse:
     if use_esl:
         focus = " ".join(keywords[:2]) if keywords else "English"
         secondary = keywords[2] if len(keywords) > 2 else (keywords[1] if len(keywords) > 1 else "communication")
+        # Mixed ESL + THPT banks (internal style-matched; no live scrape).
         banks = _english_esl_banks(level, focus, secondary)
+        raw_title = f"{kind_prefix}: {title_hint[:50]}" if title_hint else f"{kind_prefix} English"
         title = (
-            _with_cefr_title(f"{title_hint[:60]} Quiz", level)
+            _with_cefr_title(f"{raw_title} Quiz", level)
             if is_cefr
-            else _with_level_title(f"{title_hint[:60]}", level, is_cefr=False)
+            else _with_level_title(raw_title, level, is_cefr=False)
         )
     else:
         focus = " ".join(keywords[:2]) if keywords else (subject if subject != "Other" else "chủ đề")
         banks = _subject_quiz_banks(subject, lang, level, focus, topic=topic)
-        base_title = title_hint[:60] if title_hint else subject
+        base_title = title_hint[:50] if title_hint else subject
+        raw_title = f"{kind_prefix}: {base_title}"
         title = (
-            _with_cefr_title(f"{base_title} Quiz", level)
+            _with_cefr_title(f"{raw_title} Quiz", level)
             if is_cefr
-            else _with_level_title(base_title, level, is_cefr=False)
+            else _with_level_title(raw_title, level, is_cefr=False)
         )
 
     rng = random.Random()
@@ -3141,7 +3315,12 @@ def _heuristic_quiz(body: GenerateQuizRequest) -> GenerateQuizResponse:
                 answer=letter,
             )
         )
-    return GenerateQuizResponse(title=title, questions=questions, source="heuristic")
+    return GenerateQuizResponse(
+        title=title,
+        questions=questions,
+        source="heuristic",
+        attribution=QUIZ_BANK_ATTRIBUTION,
+    )
 
 
 def _parse_quiz_json(
@@ -3236,7 +3415,12 @@ def _parse_quiz_json(
         logger.info("generate-quiz: skipped %s ESL-meta AI items", skipped_esl)
     if not questions:
         return None
-    return GenerateQuizResponse(title=title, questions=questions, source="ai")
+    return GenerateQuizResponse(
+        title=title,
+        questions=questions,
+        source="ai",
+        attribution=QUIZ_BANK_ATTRIBUTION,
+    )
 
 
 def _ensure_response_level(
@@ -3255,6 +3439,7 @@ def _ensure_response_level(
         title=title,
         questions=resp.questions,
         source=resp.source,
+        attribution=resp.attribution or QUIZ_BANK_ATTRIBUTION,
     )
 
 
@@ -3276,6 +3461,7 @@ def _pad_with_heuristic(
             title=parsed.title,
             questions=parsed.questions[:need],
             source=parsed.source,
+            attribution=parsed.attribution or QUIZ_BANK_ATTRIBUTION,
         )
     filler = _heuristic_quiz(body).questions
     merged = list(parsed.questions)
@@ -3292,6 +3478,7 @@ def _pad_with_heuristic(
         title=parsed.title or fallback_title,
         questions=merged[:need],
         source=parsed.source if parsed.questions else "heuristic",
+        attribution=QUIZ_BANK_ATTRIBUTION,
     )
 
 
@@ -3324,20 +3511,24 @@ async def _lesson_context_hint(classroom_id: str | None) -> str:
 async def generate_quiz(body: GenerateQuizRequest):
     t0 = time.perf_counter()
     level, is_cefr = _resolve_quiz_level(body)
+    kind = _normalize_quiz_kind(body.kind)
     topic = (body.topic or "").strip()
     subject = _detect_quiz_subject(topic) if topic else ("English" if is_cefr else "Other")
     lang = _detect_quiz_language(topic, subject=subject, is_cefr=is_cefr)
     reject_esl = not (is_cefr or _is_english_learning_subject(subject))
-    fallback = _ensure_response_level(_heuristic_quiz(body), level, is_cefr=is_cefr)
+    fallback = _with_attribution(
+        _ensure_response_level(_heuristic_quiz(body), level, is_cefr=is_cefr)
+    )
 
     kw_list = _topic_keywords(topic) if topic else []
     logger.info(
-        "generate-quiz: detect language=%s subject=%s level=%s is_cefr=%s count=%s "
+        "generate-quiz: detect language=%s subject=%s level=%s is_cefr=%s kind=%s count=%s "
         "reject_esl=%s prefer_heuristic=%s quiz_model=%s timeout=%.2f keywords=%s",
         lang,
         subject,
         level,
         is_cefr,
+        kind,
         body.count,
         reject_esl,
         QUIZ_PREFER_HEURISTIC,
@@ -3348,16 +3539,17 @@ async def generate_quiz(body: GenerateQuizRequest):
 
     def _finish(resp: GenerateQuizResponse, *, path: str) -> GenerateQuizResponse:
         duration_ms = int((time.perf_counter() - t0) * 1000)
-        sample = resp.questions[0].prompt if resp.questions else ""
+        out = _with_attribution(resp)
+        sample = out.questions[0].prompt if out.questions else ""
         logger.info(
             "generate-quiz: done path=%s source=%s n=%s duration_ms=%s sample=%r",
             path,
-            resp.source,
-            len(resp.questions),
+            out.source,
+            len(out.questions),
             duration_ms,
             sample[:180],
         )
-        return resp
+        return out
 
     # Fast path (default): enriched subject/language banks — primary UX under ~1s.
     if QUIZ_PREFER_HEURISTIC or not topic:
@@ -3392,6 +3584,12 @@ async def generate_quiz(body: GenerateQuizRequest):
             "Other": "Môn học",
         }.get(subject, subject)
 
+        kind_label = _kind_title_prefix(kind)
+        thpt_style = (
+            "STYLE: Vietnamese THPT / HSA-style multiple-choice "
+            '(stems like "Mark the letter A, B, C, or D…"; grammar, vocab, cloze, mini-reading). '
+            "Inspired by public exam banks (tailieuonthi / nganhangdethi) — write ORIGINAL items only.\n"
+        )
         if is_cefr or _is_english_learning_subject(subject):
             system = (
                 "You generate English exam quizzes for language learners.\n"
@@ -3400,7 +3598,9 @@ async def generate_quiz(body: GenerateQuizRequest):
                 f"Create exactly {body.count} questions.\n"
                 'EVERY question MUST be type "mcq" with exactly 4 choices (plain texts for A–D).\n'
                 "answer must be the correct letter (A/B/C/D) or the exact choice text.\n"
-                f'Include the CEFR level "{level}" in the title (e.g. "Travel English · {level} Quiz").\n'
+                f'Include the CEFR level "{level}" and quiz kind "{kind_label}" in the title '
+                f'(e.g. "{kind_label}: Travel English · {level} Quiz").\n'
+                f"{thpt_style}"
                 "CRITICAL RULES:\n"
                 "- Classroom title and description are CONTEXT only (topic/scope/level).\n"
                 "- Do NOT copy, quote, or paste the classroom title or description into any question prompt.\n"
@@ -3410,7 +3610,11 @@ async def generate_quiz(body: GenerateQuizRequest):
                 "- Vary grammar, vocabulary, and functional English; do not repeat the same stem.\n"
                 "- Keep each prompt a short exam stem (1–3 sentences max)."
             )
-            style_default = "Clear CEFR-aligned 4-option MCQs; practical English."
+            style_default = (
+                "THPT/HSA-style 4-option MCQs; clear CEFR-aligned English."
+                if kind == "exam"
+                else "Clear CEFR-aligned 4-option MCQs; practical English."
+            )
             level_line = f"CEFR level: {level}\n"
             lang_line = "OUTPUT LANGUAGE: English (all stems + choices).\n"
             subject_line = f"Subject focus: English language learning ({subject}).\n"
@@ -3427,8 +3631,10 @@ async def generate_quiz(body: GenerateQuizRequest):
                 f"Create exactly {body.count} questions.\n"
                 'EVERY question MUST be type "mcq" with exactly 4 choices (plain texts for A–D).\n'
                 "answer must be the correct letter (A/B/C/D) or the exact choice text.\n"
-                f'Include the class grade "{level}" in the title (e.g. "{subject_vi} · {level}").\n'
+                f'Include the class grade "{level}" and kind "{kind_label}" in the title '
+                f'(e.g. "{kind_label}: {subject_vi} · {level}").\n'
                 f"{lang_rule}"
+                f"{thpt_style}"
                 f"SUBJECT: {subject} ({subject_vi}). Questions must test REAL {subject} knowledge "
                 f"(facts, concepts, causes/effects, problem-solving) for grade {level}.\n"
                 "CRITICAL RULES:\n"
@@ -3444,9 +3650,9 @@ async def generate_quiz(body: GenerateQuizRequest):
                 "- Keep each prompt a short exam stem (1–3 sentences max)."
             )
             style_default = (
-                "Trắc nghiệm 4 đáp án bằng tiếng Việt, đúng môn học (không phải luyện tiếng Anh)."
+                "Trắc nghiệm 4 đáp án phong cách THPT/HSA, đúng môn học (không phải luyện tiếng Anh)."
                 if lang == "vi"
-                else "4-option subject MCQs; not ESL pedagogy."
+                else "THPT/HSA-style 4-option subject MCQs; not ESL pedagogy."
             )
             level_line = f"Class grade / level: {level}\n"
             lang_line = f"Detected output language: {lang}\n"
@@ -3457,6 +3663,7 @@ async def generate_quiz(body: GenerateQuizRequest):
             "do not paste them into question prompts.\n"
             f"Classroom title: {class_title}\n"
             f"Classroom description: {class_desc or '(none)'}\n"
+            f"Quiz kind: {kind} ({kind_label})\n"
             f"{subject_line}"
             f"{lang_line}"
             f"Inferred topic keywords: {keywords}\n"

@@ -50,6 +50,7 @@ export interface Lesson {
 }
 
 export type QuizStatus = "DRAFT" | "PUBLISHED";
+export type QuizKind = "EXAM" | "PRACTICE" | "GAME";
 export type QuestionType = "short" | "mcq";
 
 export interface QuizQuestion {
@@ -65,6 +66,12 @@ export interface Quiz {
   classroomId: string;
   title: string;
   status?: QuizStatus;
+  kind?: QuizKind;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  durationMinutes?: number | null;
+  reminderMinutesBefore?: number | null;
+  sourceLabel?: string | null;
   questionsJson: string;
 }
 
@@ -81,6 +88,7 @@ export interface GenerateQuizResponse {
   title: string;
   questions: QuizQuestion[];
   source?: string;
+  attribution?: string;
 }
 
 export interface ClassroomMember {
@@ -90,6 +98,45 @@ export interface ClassroomMember {
   studentName: string;
   studentEmail: string;
   joinedAt?: string;
+}
+
+export type ChatAttachmentKind = "image" | "video" | "file";
+
+export interface ChatAttachment {
+  id: string;
+  kind: ChatAttachmentKind | string;
+  fileName: string;
+  mimeType: string;
+  urlOrData: string;
+  sizeBytes?: number | null;
+}
+
+export interface ChatReactionChip {
+  emoji: string;
+  count: number;
+  reactedByMe: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  classroomId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: Role | string;
+  text?: string | null;
+  deleted: boolean;
+  pinned?: boolean;
+  pinnedAt?: string | null;
+  editedAt?: string | null;
+  createdAt: string;
+  attachments: ChatAttachment[];
+  reactions: ChatReactionChip[];
+}
+
+/** GET /chat/messages response: pinned strip + chronological page. */
+export interface ChatFeed {
+  pinned: ChatMessage[];
+  messages: ChatMessage[];
 }
 
 export interface TutorSource {

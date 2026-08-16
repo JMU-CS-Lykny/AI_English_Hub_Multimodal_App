@@ -98,7 +98,7 @@ public class ClassroomController {
                 userId(http),
                 role(http),
                 req.inviteCode(),
-                header(http, "X-User-Name"),
+                UserHeaderEncoding.decode(header(http, "X-User-Name")),
                 header(http, "X-User-Email"),
                 req.message());
         return toJoinResponse(jr);

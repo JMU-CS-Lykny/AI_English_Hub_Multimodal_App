@@ -9,7 +9,7 @@ import SiteHeader from "@/components/SiteHeader";
 import StudentMascotHost from "@/components/StudentMascotHost";
 import { apiFetch } from "@/lib/api";
 import { getClassroomMeta } from "@/lib/classroomMeta";
-import type { Classroom, Quiz, QuizAttempt, QuizQuestion } from "@/lib/types";
+import type { Classroom, Quiz, QuizAttempt, QuizKind, QuizQuestion } from "@/lib/types";
 
 function parseQuestions(json: string | undefined): QuizQuestion[] {
   if (!json) return [];
@@ -21,12 +21,17 @@ function parseQuestions(json: string | undefined): QuizQuestion[] {
       prompt: q.prompt || "",
       type: q.type === "mcq" ? "mcq" : "short",
       choices: Array.isArray(q.choices) ? q.choices : [],
-      // Never trust client-side answer for display; API strips for students
-      answer: undefined,
     }));
   } catch {
     return [];
   }
+}
+
+function normalizeKind(kind?: QuizKind | string | null): QuizKind {
+  const k = String(kind || "PRACTICE").toUpperCase();
+  if (k === "EXAM") return "EXAM";
+  // GAME (legacy API kind) uses the same classic take UI as PRACTICE.
+  return "PRACTICE";
 }
 
 function isAnswered(value: string | undefined): boolean {
@@ -74,7 +79,6 @@ function TakeExamContent({
         const meta = getClassroomMeta(classroomId, classroom.name, classroom.description);
         onCoverChange?.(meta.coverImage?.trim() || null);
       } else if (classroomId) {
-        // Classroom fetch failed — still resolve from stored/inferred meta with empty name.
         const meta = getClassroomMeta(classroomId, "");
         onCoverChange?.(meta.coverImage?.trim() || null);
       } else {
@@ -115,6 +119,29 @@ function TakeExamContent({
     setCurrentIndex((i) => Math.max(i - 1, 0));
   }
 
+  async function submitAnswers(finalAnswers: string[]) {
+    setSubmitting(true);
+    setError("");
+    setNavHint("");
+    try {
+      const attempt = await apiFetch<QuizAttempt>(
+        `/api/v1/assessments/quizzes/${quizId}/submit`,
+        {
+          method: "POST",
+          body: JSON.stringify({ answers: finalAnswers }),
+        },
+      );
+      setResult(attempt);
+      if (attempt.maxScore > 0 && attempt.score === attempt.maxScore) {
+        setShowFireworks(true);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nộp bài thất bại");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (result) return;
@@ -128,26 +155,7 @@ function TakeExamContent({
       setNavHint(`Câu ${unanswered + 1} chưa có đáp án. Vui lòng trả lời trước khi nộp.`);
       return;
     }
-    setSubmitting(true);
-    setError("");
-    setNavHint("");
-    try {
-      const attempt = await apiFetch<QuizAttempt>(
-        `/api/v1/assessments/quizzes/${quizId}/submit`,
-        {
-          method: "POST",
-          body: JSON.stringify({ answers }),
-        },
-      );
-      setResult(attempt);
-      if (attempt.maxScore > 0 && attempt.score === attempt.maxScore) {
-        setShowFireworks(true);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Nộp bài thất bại");
-    } finally {
-      setSubmitting(false);
-    }
+    await submitAnswers(answers);
   }
 
   if (loading) {
@@ -165,19 +173,28 @@ function TakeExamContent({
     );
   }
 
+  const kind = normalizeKind(quiz?.kind);
+  const backHref = `/student/classrooms/${classroomId}`;
+
   const total = questions.length;
   const q = questions[currentIndex];
   const isLast = currentIndex === total - 1;
   const progressPct = total > 0 ? ((currentIndex + 1) / total) * 100 : 0;
+  const eyebrow = kind === "EXAM" ? "Bài kiểm tra" : "Luyện tập";
 
   return (
     <>
       <div className="page-title-row">
         <div>
-          <p className="eyebrow">Bài kiểm tra</p>
+          <p className="eyebrow">{eyebrow}</p>
           <h1>{quiz?.title || "Bài kiểm tra"}</h1>
+          {quiz?.sourceLabel ? (
+            <p className="page-subtitle" style={{ marginBottom: 0 }}>
+              {quiz.sourceLabel}
+            </p>
+          ) : null}
         </div>
-        <Link href={`/student/classrooms/${classroomId}`} className="btn btn-ghost btn-sm">
+        <Link href={backHref} className="btn btn-ghost btn-sm">
           ← Lớp học
         </Link>
       </div>
@@ -200,7 +217,7 @@ function TakeExamContent({
             </p>
           )}
           <Link
-            href={`/student/classrooms/${classroomId}`}
+            href={backHref}
             className="btn btn-primary btn-sm"
             style={{ marginTop: "0.85rem" }}
           >

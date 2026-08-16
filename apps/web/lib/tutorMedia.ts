@@ -1,9 +1,13 @@
 /** Browser helpers for tutor multimodal: mic STT + image attach. */
 
 export function stripDataUrlToBase64(dataUrlOrB64: string): string {
-  const raw = (dataUrlOrB64 || "").trim();
-  if (raw.startsWith("data:") && raw.includes(",")) {
-    return raw.split(",", 1)[1].trim();
+  const raw = (dataUrlOrB64 ?? "").trim();
+  if (raw.startsWith("data:")) {
+    // JS split limit = max array length (unlike Python). Prefer indexOf.
+    const comma = raw.indexOf(",");
+    if (comma >= 0) {
+      return (raw.slice(comma + 1) ?? "").trim();
+    }
   }
   return raw;
 }
@@ -28,39 +32,49 @@ export async function fileToTutorImagePayload(
   maxSide = 768,
   maxBytes = 900 * 1024,
 ): Promise<{ dataUrl: string; base64: string; mimeType: string }> {
-  const type = "type" in file ? file.type : "";
-  if (type && !type.startsWith("image/")) {
-    throw new Error("Vui lòng chọn tệp ảnh.");
-  }
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
+  try {
+    const type = "type" in file ? (file.type ?? "") : "";
+    if (type && !type.startsWith("image/")) {
+      throw new Error("Vui lòng chọn tệp ảnh.");
+    }
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      throw new Error("Không thể xử lý ảnh.");
+    }
+    ctx.drawImage(bitmap, 0, 0, w, h);
     bitmap.close();
-    throw new Error("Không thể xử lý ảnh.");
-  }
-  ctx.drawImage(bitmap, 0, 0, w, h);
-  bitmap.close();
 
-  let quality = 0.85;
-  let dataUrl = canvas.toDataURL("image/jpeg", quality);
-  while (dataUrl.length > maxBytes * 1.37 && quality > 0.45) {
-    quality -= 0.1;
-    dataUrl = canvas.toDataURL("image/jpeg", quality);
+    let quality = 0.85;
+    let dataUrl = canvas.toDataURL("image/jpeg", quality);
+    while (dataUrl.length > maxBytes * 1.37 && quality > 0.45) {
+      quality -= 0.1;
+      dataUrl = canvas.toDataURL("image/jpeg", quality);
+    }
+    if (dataUrl.length > maxBytes * 1.37) {
+      const mb = Math.max(0.1, Math.round((maxBytes / (1024 * 1024)) * 10) / 10);
+      throw new Error(`Ảnh quá lớn sau khi nén (giới hạn ~${mb}MB).`);
+    }
+    const base64 = stripDataUrlToBase64(dataUrl);
+    if (!dataUrl || !base64) {
+      throw new Error("Không đọc được nội dung ảnh.");
+    }
+    return {
+      dataUrl,
+      base64,
+      mimeType: "image/jpeg",
+    };
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    throw new Error("Không đọc được ảnh. Thử tệp JPEG/PNG khác.");
   }
-  if (dataUrl.length > maxBytes * 1.37) {
-    throw new Error("Ảnh quá lớn sau khi nén (giới hạn ~900KB).");
-  }
-  return {
-    dataUrl,
-    base64: stripDataUrlToBase64(dataUrl),
-    mimeType: "image/jpeg",
-  };
 }
 
 /** Convenience: data URL only (used by TutorInner / MascotChat). */
